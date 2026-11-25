@@ -2,11 +2,13 @@
 --   * his cracks smoulder when slow and blaze brighter the faster he goes
 --   * the tattered red scarf tail streams and flutters behind him (a little rope sim)
 --   * his sneaker flames grow with speed
+--   * his cartoon face changes expression (AshFace)
 -- The scarf knot, cracks and flame emitters themselves are built by AshBuilder on the server.
 
 local Workspace = game:GetService("Workspace")
 
 local Config = require(script.Parent.Config)
+local AshFace = require(script.Parent.AshFace)
 
 local AshFx = {}
 AshFx.__index = AshFx
@@ -51,6 +53,7 @@ function AshFx.new(character: Model, ctrl)
 	end
 	self.knot = character:FindFirstChild("AshScarfKnot", true)
 	self.torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+	self.face = AshFace.new(character)
 
 	-- Scarf tail: a chain of points hanging off the back of the knot, drawn as flat strips.
 	-- The last strip splits in two for a tattered end.
@@ -219,6 +222,9 @@ function AshFx:Update(dt: number, speed: number, hidden: boolean)
 	end
 
 	self:UpdateScarf(dt, speed, hidden)
+	if self.face then
+		self.face:Update(dt, self.ctrl, speed, hidden)
+	end
 end
 
 function AshFx:Destroy()

@@ -1,8 +1,8 @@
 -- Builds Ash, the playable main character, on the standard Roblox R6 rig
 -- (Head, Torso, two arms, two legs), kept simple to match the game's art style.
 -- His look comes from colors plus a few small touches:
---   * charcoal-gray body
---   * blank glowing white eyes
+--   * a bright body color that contrasts with the lava levels (Config.AshBodyColor)
+--   * a cartoon face that changes expression (AshFace)
 --   * a glowing orange crack across the chest
 --   * a red scarf knot around the neck (AshFx streams the tail behind him)
 --   * glowing orange sneaker bands on the bottoms of the legs, with heel flames
@@ -15,11 +15,15 @@
 --   AshScarfKnot  the scarf around the neck (the tail hangs off its back)
 --   AshFlame      attachments on the sneakers holding the flame emitters
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Momentum = ReplicatedStorage:WaitForChild("Momentum")
+local Config = require(Momentum:WaitForChild("Config"))
+local AshFace = require(Momentum:WaitForChild("AshFace"))
+
 local AshBuilder = {}
 
-local CHARCOAL = Color3.fromRGB(44, 42, 46)
 local EMBER = Color3.fromRGB(255, 120, 30)
-local EYE = Color3.fromRGB(255, 250, 235)
 local SCARF = Color3.fromRGB(165, 24, 22)
 
 -- Standard R6 sizes and positions, with the HumanoidRootPart's center at the origin
@@ -72,7 +76,7 @@ local function bodyPart(name: string, size: Vector3, center: Vector3): Part
 	p.Name = name
 	p.Size = size
 	p.CFrame = CFrame.new(center)
-	p.Color = CHARCOAL
+	p.Color = Config.AshBodyColor
 	p.Material = Enum.Material.SmoothPlastic
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
@@ -113,10 +117,8 @@ local function addLooks(parts)
 	mesh.Scale = Vector3.new(1.25, 1.25, 1.25)
 	mesh.Parent = head
 
-	-- Blank glowing eyes
-	for _, side in { -1, 1 } do
-		deco(head, "AshEye", Vector3.new(0.28, 0.16, 0.1), CFrame.new(0.27 * side, 0.08, -0.6), EYE, true)
-	end
+	-- Cartoon face (expressions are driven on the client by AshFx)
+	AshFace.Build(head)
 
 	-- One jagged glowing crack across the chest
 	local crack = { { -0.55, 0.65 }, { -0.15, 0.2 }, { -0.4, -0.15 }, { 0.3, -0.7 } }

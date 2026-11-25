@@ -116,6 +116,7 @@ local Config = {
 	AfterimageStartTransparency = 0.45, -- how solid a fresh ghost is at full strength
 
 	-- Ash (the main character)
+	AshBodyColor = Color3.fromRGB(30, 200, 255), -- electric cyan: the opposite of lava orange, so he stands out
 	AshGlowFullSpeed = 150, -- his cracks and sneaker flames are at full blaze by this speed
 	AshScarfSegments = 7, -- links in the scarf tail
 	AshScarfSegmentLength = 0.5,
