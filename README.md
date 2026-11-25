@@ -15,7 +15,7 @@ A custom momentum character controller for Roblox, plus a test level.
 | `src/shared/Momentum/InputState.luau` | Keyboard and gamepad input. |
 | `src/shared/Momentum/LockOn.luau` | Picks the enemy to lock onto in the air, draws the reticle, handles touching enemies (defeat or get hurt). |
 | `src/server/EnemyService.server.luau` | Spawns Cinder Imps at every `EnemySpawn` marker, makes them hover and patrol, confirms defeats and respawns them. |
-| `src/shared/Momentum/AshFx.luau` | Ash's live effects: the chest crack that brightens with speed, the streaming scarf tail, his eye expressions. |
+| `src/shared/Momentum/AshFx.luau` | Ash's live effects: the streaming scarf tail and his eye expressions. |
 | `src/shared/Momentum/AshFace.luau` | Ash's orange circle eyes and their expressions. |
 | `src/client/MomentumClient.client.luau` | Starts everything for the local player. |
 | `src/server/AshBuilder.luau` + `AshCharacter.server.luau` | Builds Ash, the main character, and makes him everyone's `StarterCharacter`. |
@@ -147,13 +147,12 @@ mostly color plus a few touches:
 - Two glowing orange circle eyes and no mouth (`AshFace.luau`). The eyes alone show his mood: round and blinking
   when idle, squashed and tilted inward when running, happy ^ ^ arcs above top speed or when boosting or homing,
   bigger when falling, and squeezed shut > < when he gets hit.
-- A glowing orange crack across his chest, which smoulders at rest and blazes brighter as he speeds up (full at 150).
 - A red scarf. The knot is part of the body; the tail is a small rope simulation that hangs at rest and
   streams and whips behind him at speed, splitting into two ragged ends.
 
 The run cycle drives R6 too: the same gait, with the torso taking the lean and twist, and no knees or elbows.
-Tune the glow and scarf with the `Ash*` values in `Config.luau`, and his colors in `AshBuilder.luau`.
-The scarf tail, brightening glow and changing expressions are drawn on your own screen only;
+Tune the scarf with the `Ash*` values in `Config.luau`, and his colors in `AshBuilder.luau`.
+The scarf tail and changing expressions are drawn on your own screen only;
 other players see his resting eyes.
 
 ## Afterimages

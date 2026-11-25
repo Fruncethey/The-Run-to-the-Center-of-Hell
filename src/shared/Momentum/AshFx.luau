@@ -1,8 +1,7 @@
 -- Ash's local effects, driven by CharacterFx every frame:
---   * his cracks smoulder when slow and blaze brighter the faster he goes
 --   * the tattered red scarf tail streams and flutters behind him (a little rope sim)
 --   * his eyes change expression (AshFace)
--- The scarf knot and cracks themselves are built by AshBuilder on the server.
+-- The scarf knot itself is built by AshBuilder on the server.
 
 local Workspace = game:GetService("Workspace")
 
@@ -14,8 +13,6 @@ AshFx.__index = AshFx
 
 local SCARF = Color3.fromRGB(165, 24, 22)
 local SCARF_DARK = Color3.fromRGB(120, 14, 14)
-local CRACK_DIM = Color3.fromRGB(120, 32, 8)
-local CRACK_HOT = Color3.fromRGB(255, 175, 70)
 
 local function scarfPart(width: number, color: Color3): Part
 	local p = Instance.new("Part")
@@ -39,14 +36,7 @@ function AshFx.new(character: Model, ctrl)
 	local self = setmetatable({}, AshFx)
 	self.ctrl = ctrl
 	self.time = 0
-	self.glow = 0
 
-	self.cracks = {}
-	for _, d in character:GetDescendants() do
-		if d:IsA("BasePart") and d.Name == "AshCrack" then
-			table.insert(self.cracks, d)
-		end
-	end
 	self.knot = character:FindFirstChild("AshScarfKnot", true)
 	self.torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
 	self.face = AshFace.new(character)
@@ -195,18 +185,7 @@ function AshFx:UpdateScarf(dt: number, speed: number, hidden: boolean)
 end
 
 function AshFx:Update(dt: number, speed: number, hidden: boolean)
-	local C = Config
 	self.time += dt
-	-- Cracks: smoulder and slowly pulse at rest, blaze at speed
-	local target = math.clamp(speed / C.AshGlowFullSpeed, 0, 1)
-	self.glow += (target - self.glow) * (1 - math.exp(-6 * dt))
-	local pulse = 0.12 * (0.5 + 0.5 * math.sin(self.time * 3))
-	local heat = math.clamp(self.glow + pulse * (1 - self.glow), 0, 1)
-	local color = CRACK_DIM:Lerp(CRACK_HOT, heat)
-	for _, crack in self.cracks do
-		crack.Color = color
-	end
-
 	self:UpdateScarf(dt, speed, hidden)
 	if self.face then
 		self.face:Update(dt, self.ctrl, speed, hidden)

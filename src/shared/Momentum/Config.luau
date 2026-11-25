@@ -117,7 +117,6 @@ local Config = {
 
 	-- Ash (the main character)
 	AshBodyColor = Color3.fromRGB(30, 200, 255), -- electric cyan: the opposite of lava orange, so he stands out
-	AshGlowFullSpeed = 150, -- his chest crack is at full blaze by this speed
 	AshScarfSegments = 7, -- links in the scarf tail
 	AshScarfSegmentLength = 0.5,
 	AshScarfDrag = 3, -- air drag on the scarf; higher streams it straighter behind

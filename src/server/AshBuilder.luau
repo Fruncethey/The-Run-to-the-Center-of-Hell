@@ -3,14 +3,12 @@
 -- His look comes from colors plus a few small touches:
 --   * a bright body color that contrasts with the lava levels (Config.AshBodyColor)
 --   * glowing orange circle eyes that change expression (AshFace)
---   * a glowing orange crack across the chest
 --   * a red scarf knot around the neck (AshFx streams the tail behind him)
 --
 -- The rig uses the standard R6 part and joint names, so the run cycle (which
 -- drives R6 joints too), spin-ball and afterimages work on it.
 --
 -- Decoration parts are named so the client can find them:
---   AshCrack      glowing parts (brightened with speed by AshFx)
 --   AshScarfKnot  the scarf around the neck (the tail hangs off its back)
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -21,7 +19,6 @@ local AshFace = require(Momentum:WaitForChild("AshFace"))
 
 local AshBuilder = {}
 
-local EMBER = Color3.fromRGB(255, 120, 30)
 local SCARF = Color3.fromRGB(165, 24, 22)
 
 -- Standard R6 sizes and positions, with the HumanoidRootPart's center at the origin
@@ -117,15 +114,6 @@ local function addLooks(parts)
 
 	-- Orange circle eyes (expressions are driven on the client by AshFx)
 	AshFace.Build(head)
-
-	-- One jagged glowing crack across the chest
-	local crack = { { -0.55, 0.65 }, { -0.15, 0.2 }, { -0.4, -0.15 }, { 0.3, -0.7 } }
-	for i = 1, #crack - 1 do
-		local a = Vector3.new(crack[i][1], crack[i][2], -0.5)
-		local b = Vector3.new(crack[i + 1][1], crack[i + 1][2], -0.5)
-		local cf = CFrame.lookAt((a + b) / 2 - Vector3.new(0, 0, 0.01), b - Vector3.new(0, 0, 0.01), -Vector3.zAxis)
-		deco(torso, "AshCrack", Vector3.new(0.12, 0.04, (b - a).Magnitude + 0.06), cf, EMBER, true)
-	end
 
 	-- Red scarf knot around the neck
 	deco(torso, "AshScarfKnot", Vector3.new(1.3, 0.3, 1.1), CFrame.new(0, 0.92, 0), SCARF)

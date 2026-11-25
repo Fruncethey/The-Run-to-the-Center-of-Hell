@@ -202,10 +202,9 @@ end
 return AshFace
 ]=====])
 script(f, 'ModuleScript', 'AshFx', [=====[-- Ash's local effects, driven by CharacterFx every frame:
---   * his cracks smoulder when slow and blaze brighter the faster he goes
 --   * the tattered red scarf tail streams and flutters behind him (a little rope sim)
 --   * his eyes change expression (AshFace)
--- The scarf knot and cracks themselves are built by AshBuilder on the server.
+-- The scarf knot itself is built by AshBuilder on the server.
 
 local Workspace = game:GetService("Workspace")
 
@@ -217,8 +216,6 @@ AshFx.__index = AshFx
 
 local SCARF = Color3.fromRGB(165, 24, 22)
 local SCARF_DARK = Color3.fromRGB(120, 14, 14)
-local CRACK_DIM = Color3.fromRGB(120, 32, 8)
-local CRACK_HOT = Color3.fromRGB(255, 175, 70)
 
 local function scarfPart(width: number, color: Color3): Part
 	local p = Instance.new("Part")
@@ -242,14 +239,7 @@ function AshFx.new(character: Model, ctrl)
 	local self = setmetatable({}, AshFx)
 	self.ctrl = ctrl
 	self.time = 0
-	self.glow = 0
 
-	self.cracks = {}
-	for _, d in character:GetDescendants() do
-		if d:IsA("BasePart") and d.Name == "AshCrack" then
-			table.insert(self.cracks, d)
-		end
-	end
 	self.knot = character:FindFirstChild("AshScarfKnot", true)
 	self.torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
 	self.face = AshFace.new(character)
@@ -398,18 +388,7 @@ function AshFx:UpdateScarf(dt: number, speed: number, hidden: boolean)
 end
 
 function AshFx:Update(dt: number, speed: number, hidden: boolean)
-	local C = Config
 	self.time += dt
-	-- Cracks: smoulder and slowly pulse at rest, blaze at speed
-	local target = math.clamp(speed / C.AshGlowFullSpeed, 0, 1)
-	self.glow += (target - self.glow) * (1 - math.exp(-6 * dt))
-	local pulse = 0.12 * (0.5 + 0.5 * math.sin(self.time * 3))
-	local heat = math.clamp(self.glow + pulse * (1 - self.glow), 0, 1)
-	local color = CRACK_DIM:Lerp(CRACK_HOT, heat)
-	for _, crack in self.cracks do
-		crack.Color = color
-	end
-
 	self:UpdateScarf(dt, speed, hidden)
 	if self.face then
 		self.face:Update(dt, self.ctrl, speed, hidden)
@@ -1007,7 +986,6 @@ local Config = {
 
 	-- Ash (the main character)
 	AshBodyColor = Color3.fromRGB(30, 200, 255), -- electric cyan: the opposite of lava orange, so he stands out
-	AshGlowFullSpeed = 150, -- his chest crack is at full blaze by this speed
 	AshScarfSegments = 7, -- links in the scarf tail
 	AshScarfSegmentLength = 0.5,
 	AshScarfDrag = 3, -- air drag on the scarf; higher streams it straighter behind
@@ -2496,14 +2474,12 @@ script(f, 'ModuleScript', 'AshBuilder', [=====[-- Builds Ash, the playable main 
 -- His look comes from colors plus a few small touches:
 --   * a bright body color that contrasts with the lava levels (Config.AshBodyColor)
 --   * glowing orange circle eyes that change expression (AshFace)
---   * a glowing orange crack across the chest
 --   * a red scarf knot around the neck (AshFx streams the tail behind him)
 --
 -- The rig uses the standard R6 part and joint names, so the run cycle (which
 -- drives R6 joints too), spin-ball and afterimages work on it.
 --
 -- Decoration parts are named so the client can find them:
---   AshCrack      glowing parts (brightened with speed by AshFx)
 --   AshScarfKnot  the scarf around the neck (the tail hangs off its back)
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -2514,7 +2490,6 @@ local AshFace = require(Momentum:WaitForChild("AshFace"))
 
 local AshBuilder = {}
 
-local EMBER = Color3.fromRGB(255, 120, 30)
 local SCARF = Color3.fromRGB(165, 24, 22)
 
 -- Standard R6 sizes and positions, with the HumanoidRootPart's center at the origin
@@ -2610,15 +2585,6 @@ local function addLooks(parts)
 
 	-- Orange circle eyes (expressions are driven on the client by AshFx)
 	AshFace.Build(head)
-
-	-- One jagged glowing crack across the chest
-	local crack = { { -0.55, 0.65 }, { -0.15, 0.2 }, { -0.4, -0.15 }, { 0.3, -0.7 } }
-	for i = 1, #crack - 1 do
-		local a = Vector3.new(crack[i][1], crack[i][2], -0.5)
-		local b = Vector3.new(crack[i + 1][1], crack[i + 1][2], -0.5)
-		local cf = CFrame.lookAt((a + b) / 2 - Vector3.new(0, 0, 0.01), b - Vector3.new(0, 0, 0.01), -Vector3.zAxis)
-		deco(torso, "AshCrack", Vector3.new(0.12, 0.04, (b - a).Magnitude + 0.06), cf, EMBER, true)
-	end
 
 	-- Red scarf knot around the neck
 	deco(torso, "AshScarfKnot", Vector3.new(1.3, 0.3, 1.1), CFrame.new(0, 0.92, 0), SCARF)
