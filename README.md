@@ -16,7 +16,7 @@ A custom momentum character controller for Roblox, plus a test level.
 | `src/shared/Momentum/LockOn.luau` | Picks the enemy to lock onto in the air, draws the reticle, handles touching enemies (defeat or get hurt). |
 | `src/server/EnemyService.server.luau` | Spawns Cinder Imps at every `EnemySpawn` marker, makes them hover and patrol, confirms defeats and respawns them. |
 | `src/shared/Momentum/AshFx.luau` | Ash's live effects: cracks that brighten with speed, the streaming scarf tail, sneaker flames. |
-| `src/shared/Momentum/AshFace.luau` | Ash's cartoon face and its expressions. |
+| `src/shared/Momentum/AshFace.luau` | Ash's orange circle eyes and their expressions. |
 | `src/client/MomentumClient.client.luau` | Starts everything for the local player. |
 | `src/server/AshBuilder.luau` + `AshCharacter.server.luau` | Builds Ash, the main character, and makes him everyone's `StarterCharacter`. |
 | `src/server/PlayerSetup.server.luau` | Collision group for characters, turns off shift-lock (Shift is boost). |
@@ -144,9 +144,9 @@ server start (plain parts, no uploaded assets) and installs him as `StarterPlaye
 mostly color plus a few touches:
 
 - Electric cyan body (`AshBodyColor` in `Config.luau`), the opposite of lava orange, so he stands out in every level.
-- A cartoon face (`AshFace.luau`) that changes expression with what he's doing: a relaxed smile with blinks when
-  idle, narrowed eyes and lowered brows when running, a big grin above top speed or when boosting or homing,
-  wide eyes and an "O" mouth when falling, and eyes squeezed shut with gritted teeth when he gets hit.
+- Two glowing orange circle eyes and no mouth (`AshFace.luau`). The eyes alone show his mood: round and blinking
+  when idle, squashed and tilted inward when running, happy ^ ^ arcs above top speed or when boosting or homing,
+  bigger when falling, and squeezed shut > < when he gets hit.
 - A glowing orange crack across his chest and glowing orange sneaker bands, which smoulder at rest and blaze
   brighter as he speeds up (full at 150). Heel flames grow with speed too.
 - A red scarf. The knot is part of the body; the tail is a small rope simulation that hangs at rest and
@@ -155,7 +155,7 @@ mostly color plus a few touches:
 The run cycle drives R6 too: the same gait, with the torso taking the lean and twist, and no knees or elbows.
 Tune the glow and scarf with the `Ash*` values in `Config.luau`, and his colors in `AshBuilder.luau`.
 The scarf tail, brightening glow, bigger flames and changing expressions are drawn on your own screen only;
-other players see his resting face.
+other players see his resting eyes.
 
 ## Afterimages
 

@@ -9,17 +9,17 @@ local function script(folder, class, name, source)
   local s = Instance.new(class); s.Name = name; s.Source = source; s.Parent = folder; return s
 end
 do local f = put(game:GetService('ReplicatedStorage'), 'Momentum')
-script(f, 'ModuleScript', 'AshFace', [=====[-- Ash's cartoon face: two big eyes (whites, pupils, eyelids), eyebrows and a mouth,
--- drawn with a SurfaceGui on a thin invisible plate in front of the R6 head.
+script(f, 'ModuleScript', 'AshFace', [=====[-- Ash's face: two glowing orange circle eyes and nothing else (no mouth, pupils or
+-- brows), drawn with a SurfaceGui on a thin invisible plate in front of the R6 head.
 --
--- The server builds it (AshFace.Build) so everyone sees his resting face. On your own
--- screen AshFx drives it every frame (AshFace.new + Update), switching expression
--- with what you're doing:
---   idle        relaxed smile, blinks every few seconds
---   determined  narrowed eyes, brows down, flat mouth (running, jumping)
---   grin        big open grin (above top speed, boosting, homing)
---   falling     wide eyes, tiny pupils, raised brows, "O" mouth
---   wince       eyes squeezed shut > <, gritted teeth (just got hit)
+-- The server builds it (AshFace.Build) so everyone sees his resting eyes. On your own
+-- screen AshFx drives it every frame (AshFace.new + Update), and the eyes alone show
+-- his expression:
+--   idle        round circles, blinking every few seconds
+--   determined  squashed and tilted inward (running, jumping)
+--   happy       ^ ^ arcs (above top speed, boosting, homing)
+--   falling     bigger circles
+--   wince       > < squeezed shut (just got hit)
 
 local Config = require(script.Parent.Config)
 
@@ -27,20 +27,18 @@ local AshFace = {}
 AshFace.__index = AshFace
 
 local W, H = 120, 90 -- canvas pixels (plate is 1.2 x 0.9 studs at 100 px per stud)
-local EYE_W, EYE_H = 24, 32
-local EYE_Y = 38
+local EYE = 24 -- circle diameter in pixels
+local EYE_Y = 42
 local EYE_X = { Left = 40, Right = 80 }
-local MOUTH_Y = 68
-local INK = Color3.fromRGB(35, 14, 28)
-local WHITE = Color3.fromRGB(255, 255, 255)
+local ORANGE = Color3.fromRGB(255, 140, 30)
 
-local function frame(parent: Instance, name: string, size: UDim2, pos: UDim2, color: Color3, round: boolean?): Frame
+local function frame(parent: Instance, name: string, size: UDim2, pos: UDim2, round: boolean?): Frame
 	local f = Instance.new("Frame")
 	f.Name = name
 	f.AnchorPoint = Vector2.new(0.5, 0.5)
 	f.Size = size
 	f.Position = pos
-	f.BackgroundColor3 = color
+	f.BackgroundColor3 = ORANGE
 	f.BorderSizePixel = 0
 	if round then
 		local c = Instance.new("UICorner")
@@ -78,84 +76,56 @@ function AshFace.Build(head: BasePart): BasePart
 	gui.Face = Enum.NormalId.Front
 	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
 	gui.PixelsPerStud = 100
-	gui.LightInfluence = 0.4
-	gui.Brightness = 1.2
+	gui.LightInfluence = 0 -- the eyes glow
+	gui.Brightness = 2
 	gui.ClipsDescendants = true
 	gui.ResetOnSpawn = false
 	gui.Parent = plate
 
 	for side, x in EYE_X do
-		-- Open eye: white, pupil, and a skin-colored lid that slides down over it
-		local eye = frame(gui, side .. "Eye", px(EYE_W, EYE_H), px(x, EYE_Y), WHITE, true)
-		eye.ClipsDescendants = true
-		frame(eye, "Pupil", px(10, 14), UDim2.new(0.5, 0, 0.5, 2), INK, true)
-		local lid = frame(eye, "Lid", UDim2.new(1, 4, 0, 0), UDim2.new(0.5, 0, 0, 0), Config.AshBodyColor)
-		lid.AnchorPoint = Vector2.new(0.5, 0)
-		-- Squeezed shut: two strokes making > (left eye) or < (right eye)
+		local dir = if side == "Left" then 1 else -1
+
+		-- The circle (squashed, tilted and resized for expressions)
+		frame(gui, side .. "Eye", px(EYE, EYE), px(x, EYE_Y), true)
+
+		-- Happy: the top half of an orange ring, like ^
+		local happy = frame(gui, side .. "Happy", px(EYE + 4, EYE / 2), px(x, EYE_Y), false)
+		happy.BackgroundTransparency = 1
+		happy.ClipsDescendants = true
+		happy.Visible = false
+		local ring = frame(happy, "Ring", px(EYE, EYE), UDim2.new(0.5, 0, 1, 2), true)
+		ring.BackgroundTransparency = 1
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = ORANGE
+		stroke.Thickness = 5
+		stroke.Parent = ring
+
+		-- Squeezed shut: > (left eye) or < (right eye)
 		local shut = Instance.new("Frame")
 		shut.Name = side .. "Shut"
 		shut.BackgroundTransparency = 1
 		shut.AnchorPoint = Vector2.new(0.5, 0.5)
-		shut.Size = px(EYE_W, EYE_H)
+		shut.Size = px(EYE, EYE)
 		shut.Position = px(x, EYE_Y)
 		shut.Visible = false
 		shut.Parent = gui
-		local dir = if side == "Left" then 1 else -1
-		frame(shut, "Top", px(20, 5), UDim2.new(0.5, 0, 0.5, -5), INK).Rotation = 28 * dir
-		frame(shut, "Bottom", px(20, 5), UDim2.new(0.5, 0, 0.5, 5), INK).Rotation = -28 * dir
-		frame(gui, side .. "Brow", px(24, 5), px(x, EYE_Y - 23), INK, false)
+		frame(shut, "Top", px(20, 5), UDim2.new(0.5, 0, 0.5, -5)).Rotation = 28 * dir
+		frame(shut, "Bottom", px(20, 5), UDim2.new(0.5, 0, 0.5, 5)).Rotation = -28 * dir
 	end
-
-	-- Mouths (one is shown at a time)
-
-	-- Smile / frown: half of an outlined ring, clipped
-	local smile = frame(gui, "Smile", px(30, 10), px(W / 2, MOUTH_Y + 4), INK)
-	smile.BackgroundTransparency = 1
-	smile.ClipsDescendants = true
-	local ring = frame(smile, "Ring", px(26, 18), UDim2.new(0.5, 0, 0, -1), INK, true)
-	ring.BackgroundTransparency = 1
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = INK
-	stroke.Thickness = 3.5
-	stroke.Parent = ring
-
-	-- Flat, determined line
-	frame(gui, "Flat", px(22, 5), px(W / 2, MOUTH_Y), INK, false).Visible = false
-
-	-- Big D-shaped grin with a row of teeth
-	local grin = frame(gui, "Grin", px(44, 18), px(W / 2, MOUTH_Y + 6), INK)
-	grin.BackgroundTransparency = 1
-	grin.ClipsDescendants = true
-	grin.Visible = false
-	local d = frame(grin, "Shape", px(44, 36), UDim2.new(0.5, 0, 0, 0), INK, true)
-	frame(d, "Teeth", UDim2.new(0.8, 0, 0, 6), UDim2.new(0.5, 0, 0.5, 3), WHITE, false)
-
-	-- Little "O" of surprise
-	frame(gui, "O", px(13, 17), px(W / 2, MOUTH_Y + 2), INK, true).Visible = false
-
-	-- Gritted teeth
-	local grit = frame(gui, "Grit", px(28, 10), px(W / 2, MOUTH_Y + 2), WHITE, false)
-	grit.Visible = false
-	grit.Rotation = -6
-	local gs = Instance.new("UIStroke")
-	gs.Color = INK
-	gs.Thickness = 3
-	gs.Parent = grit
-	frame(grit, "Line", UDim2.new(1, 0, 0, 2), UDim2.fromScale(0.5, 0.5), INK, false)
 
 	return plate
 end
 
--- Expression targets. open: how far the lids are up (1 = wide open). scale: eye size.
--- pupil: pupil size. brow: inner-end-down angle in degrees. browY: pixels down from rest.
+-- Expression targets. w, h: eye size as a share of the circle. tilt: degrees, inner
+-- corners down. shape: which drawing to show ("Eye", "Happy" or "Shut").
 local EXPRESSIONS = {
-	idle = { open = 0.95, scale = 1, pupil = 1, brow = 0, browY = 0, mouth = "Smile", shut = false },
-	determined = { open = 0.62, scale = 1, pupil = 1, brow = 20, browY = 4, mouth = "Flat", shut = false },
-	grin = { open = 0.7, scale = 1, pupil = 1.05, brow = 16, browY = 3, mouth = "Grin", shut = false },
-	falling = { open = 1, scale = 1.22, pupil = 0.55, brow = -14, browY = -5, mouth = "O", shut = false },
-	wince = { open = 0, scale = 1, pupil = 1, brow = 24, browY = 5, mouth = "Grit", shut = true },
+	idle = { w = 1, h = 1, tilt = 0, shape = "Eye" },
+	determined = { w = 1.1, h = 0.62, tilt = 14, shape = "Eye" },
+	happy = { w = 1, h = 1, tilt = 0, shape = "Happy" },
+	falling = { w = 1.3, h = 1.3, tilt = 0, shape = "Eye" },
+	wince = { w = 1, h = 1, tilt = 0, shape = "Shut" },
 }
-local MOUTHS = { "Smile", "Flat", "Grin", "O", "Grit" }
+local SHAPES = { "Eye", "Happy", "Shut" }
 
 -- Client side: drive an existing face. Returns nil if the character has none.
 function AshFace.new(character: Model)
@@ -167,7 +137,7 @@ function AshFace.new(character: Model)
 	local self = setmetatable({}, AshFace)
 	self.gui = gui
 	self.expression = "idle"
-	self.state = table.clone(EXPRESSIONS.idle)
+	self.state = { w = 1, h = 1, tilt = 0 }
 	self.blinkIn = 2 + math.random() * 2
 	self.blink = 0
 	return self
@@ -182,7 +152,7 @@ function AshFace:Choose(ctrl, speed: number): string
 		return "falling"
 	end
 	if ctrl.boosting or ctrl.homingTarget or speed > C.TopSpeed + 15 then
-		return "grin"
+		return "happy"
 	end
 	if speed > 20 or not ctrl.grounded then
 		return "determined"
@@ -205,33 +175,27 @@ function AshFace:Update(dt: number, ctrl, speed: number, hidden: boolean)
 	local target = EXPRESSIONS[name]
 	local s = self.state
 	local k = 1 - math.exp(-14 * dt)
-	for _, key in { "open", "scale", "pupil", "brow", "browY" } do
+	for _, key in { "w", "h", "tilt" } do
 		s[key] += (target[key] - s[key]) * k
 	end
 
-	-- Blink every few seconds (not while squeezed shut)
+	-- Blink every few seconds: the circles squash flat for a moment
 	self.blinkIn -= dt
 	if self.blinkIn <= 0 then
-		self.blink = 0.13
+		self.blink = 0.12
 		self.blinkIn = 2 + math.random() * 3
 	end
 	self.blink = math.max(0, self.blink - dt)
-	local open = if self.blink > 0 then 0 else s.open
+	local h = if self.blink > 0 then 0.12 else s.h
 
-	for side, x in EYE_X do
-		local eye = gui[side .. "Eye"]
-		eye.Visible = not target.shut
-		gui[side .. "Shut"].Visible = target.shut
-		eye.Size = px(EYE_W * s.scale, EYE_H * s.scale)
-		eye.Pupil.Size = px(10 * s.pupil, 14 * s.pupil)
-		eye.Lid.Size = UDim2.new(1, 4, 1 - open, 0)
+	for side in EYE_X do
 		local dir = if side == "Left" then 1 else -1
-		local brow = gui[side .. "Brow"]
-		brow.Rotation = s.brow * dir
-		brow.Position = px(x, EYE_Y - 23 * s.scale + s.browY)
-	end
-	for _, m in MOUTHS do
-		gui[m].Visible = m == target.mouth
+		local eye = gui[side .. "Eye"]
+		eye.Size = px(EYE * s.w, math.max(3, EYE * h))
+		eye.Rotation = s.tilt * dir
+		for _, shape in SHAPES do
+			gui[side .. shape].Visible = shape == target.shape
+		end
 	end
 end
 
@@ -241,7 +205,7 @@ script(f, 'ModuleScript', 'AshFx', [=====[-- Ash's local effects, driven by Char
 --   * his cracks smoulder when slow and blaze brighter the faster he goes
 --   * the tattered red scarf tail streams and flutters behind him (a little rope sim)
 --   * his sneaker flames grow with speed
---   * his cartoon face changes expression (AshFace)
+--   * his eyes change expression (AshFace)
 -- The scarf knot, cracks and flame emitters themselves are built by AshBuilder on the server.
 
 local Workspace = game:GetService("Workspace")
@@ -2545,7 +2509,7 @@ script(f, 'ModuleScript', 'AshBuilder', [=====[-- Builds Ash, the playable main 
 -- (Head, Torso, two arms, two legs), kept simple to match the game's art style.
 -- His look comes from colors plus a few small touches:
 --   * a bright body color that contrasts with the lava levels (Config.AshBodyColor)
---   * a cartoon face that changes expression (AshFace)
+--   * glowing orange circle eyes that change expression (AshFace)
 --   * a glowing orange crack across the chest
 --   * a red scarf knot around the neck (AshFx streams the tail behind him)
 --   * glowing orange sneaker bands on the bottoms of the legs, with heel flames
@@ -2660,7 +2624,7 @@ local function addLooks(parts)
 	mesh.Scale = Vector3.new(1.25, 1.25, 1.25)
 	mesh.Parent = head
 
-	-- Cartoon face (expressions are driven on the client by AshFx)
+	-- Orange circle eyes (expressions are driven on the client by AshFx)
 	AshFace.Build(head)
 
 	-- One jagged glowing crack across the chest

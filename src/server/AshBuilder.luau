@@ -2,7 +2,7 @@
 -- (Head, Torso, two arms, two legs), kept simple to match the game's art style.
 -- His look comes from colors plus a few small touches:
 --   * a bright body color that contrasts with the lava levels (Config.AshBodyColor)
---   * a cartoon face that changes expression (AshFace)
+--   * glowing orange circle eyes that change expression (AshFace)
 --   * a glowing orange crack across the chest
 --   * a red scarf knot around the neck (AshFx streams the tail behind him)
 --   * glowing orange sneaker bands on the bottoms of the legs, with heel flames
@@ -117,7 +117,7 @@ local function addLooks(parts)
 	mesh.Scale = Vector3.new(1.25, 1.25, 1.25)
 	mesh.Parent = head
 
-	-- Cartoon face (expressions are driven on the client by AshFx)
+	-- Orange circle eyes (expressions are driven on the client by AshFx)
 	AshFace.Build(head)
 
 	-- One jagged glowing crack across the chest

@@ -2,7 +2,7 @@
 --   * his cracks smoulder when slow and blaze brighter the faster he goes
 --   * the tattered red scarf tail streams and flutters behind him (a little rope sim)
 --   * his sneaker flames grow with speed
---   * his cartoon face changes expression (AshFace)
+--   * his eyes change expression (AshFace)
 -- The scarf knot, cracks and flame emitters themselves are built by AshBuilder on the server.
 
 local Workspace = game:GetService("Workspace")
