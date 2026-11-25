@@ -95,7 +95,7 @@ Hold the roll button (Q) while moving faster than 20 to curl into a roll. It tra
 |---|---|---|
 | Holding forward | Speeds you up to `TopSpeed` (90) | Does nothing: slopes are your engine |
 | Above `TopSpeed` | Keeps it while going downhill; on flat ground sheds it back to 90 (`RunOverspeedDrag` 12/s) | Keeps it; friction is only 4/s |
-| Downhill | Strong slope gain, about 160 speed at the bottom of the stage 2 drop | 1.6x that (`RollSlopeDown`), over 200 |
+| Downhill | Strong slope gain, about 180 speed at the bottom of the stage 2 drop | 1.6x that (`RollSlopeDown`), over 200 |
 | Uphill | Normal slope loss | Half the loss (`RollSlopeUp`) |
 | Steering | Full turn rate (above top speed it scales up so the turning circle stays the same) | About a third (`RollTurnFactor`) |
 | Braking (hold back) | Strong (160/s) | Weak (30/s) |
