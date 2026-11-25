@@ -13,10 +13,13 @@ A custom momentum character controller for Roblox, plus a test level.
 | `src/shared/Momentum/RunCycle.luau` | Procedural run cycle driven by speed: walk, run and sprint blend together, with idle and in-air poses. |
 | `src/shared/Momentum/CharacterFx.luau` | Runs the run cycle (R6 falls back to default animations), spin-ball, boost trail and glow. |
 | `src/shared/Momentum/InputState.luau` | Keyboard and gamepad input. |
+| `src/shared/Momentum/LockOn.luau` | Picks the enemy to lock onto in the air, draws the reticle, handles touching enemies (defeat or get hurt). |
+| `src/server/EnemyService.server.luau` | Spawns Cinder Imps at every `EnemySpawn` marker, makes them hover and patrol, confirms defeats and respawns them. |
 | `src/client/MomentumClient.client.luau` | Starts everything for the local player. |
 | `src/server/PlayerSetup.server.luau` | Collision group for characters, turns off shift-lock (Shift is boost). |
 | `src/server/LevelBuilder.luau` + `BuildTestLevel.server.luau` | Builds the test level on server start (skips it if `Workspace.HellTestLevel` already exists). |
 | `InstallInStudio.luau` | One-paste installer for the Studio Command Bar (no Rojo needed). |
+| `tools/make_installer.py` | Regenerates `InstallInStudio.luau` from `src/` (`python3 tools/make_installer.py .`). |
 | `default.project.json` | Rojo project. |
 
 ## Install
@@ -28,6 +31,9 @@ Scripts go to `ReplicatedStorage.Momentum`, `ServerScriptService.MomentumServer`
 **Option B, no tools.** Open a place (the Baseplate template is fine), open
 View > Command Bar, paste all of `InstallInStudio.luau`, press Enter. Running it again replaces the scripts.
 
+If your place already has a `Workspace.HellTestLevel` from an older version, delete it so the level is rebuilt
+with the newest layout (including enemy spawns) the next time you press Play.
+
 Then press Play (F5). The level floats 200 studs up over a lava sea, so your old Baseplate is unaffected;
 its spawn gets disabled so you start on the level's orange spawn pad.
 
@@ -37,6 +43,8 @@ its spawn gets disabled so you start on the level's orange spawn pad.
 |---|---|---|
 | Move | WASD / arrows | Left stick |
 | Jump (hold for higher) | Space | A |
+| Homing attack (when the red reticle is on an enemy) or air dash | Space in the air | A in the air |
+| Stomp (slam straight down) | Q, Left Ctrl or C in the air | X or B in the air |
 | Spin-dash (hold while slow, release to launch; tap jump to rev) / roll (hold while fast) | Q, Left Ctrl or C | X or B |
 | Boost (needs heat) | Left Shift or E | R2 or Y |
 | Look around | Hold right mouse and drag, wheel to zoom | Right stick |
@@ -54,6 +62,9 @@ The heat meter fills while you go faster than 50 studs/s. Boost needs the bar pa
 6. **Wall run:** after the drop, steer left (A briefly) toward the long curved wall on the left. The HUD says WALL RUN.
 7. **Spin-dash:** stand still, hold Q for a second, release.
 8. **Boost:** once the heat bar passes the tick, hold Shift.
+9. **Enemies:** the two imps after the drop hurt you if you just run into them. Roll, boost or jump into them instead.
+10. **Homing chain:** run off the launch ramp and tap Space each time the reticle lands on an imp. You bounce from one to the next.
+11. **Air control:** in the air, steer with WASD (your path bends gradually), pull back to brake, tap Space with nothing locked to air dash, press Q to stomp.
 
 ## How it works (short version)
 
@@ -69,6 +80,23 @@ The heat meter fills while you go faster than 50 studs/s. Boost needs the bar pa
   its sideways offset carries you to the exit lane. Use it for corkscrews and later for grind rails.
 - Input is read on flat ground relative to the camera, then tilted onto the surface you're on, so "forward" keeps
   meaning "keep going" on walls and upside down.
+
+## Air movement and homing attack
+
+- **Steering:** in the air your flight path bends toward the stick at `AirTurnRate`, so speed carries you instead of
+  stopping on a dime. You can speed up to `TopSpeed`, holding back brakes, and extra speed above `TopSpeed` bleeds off slowly.
+- **Air dash:** jump in the air with nothing locked on. Once per jump, reset on landing or on hitting an enemy.
+- **Stomp:** roll button in the air. Slams straight down and defeats anything you land next to.
+- **Lock-on:** while airborne, the closest enemy ahead of you (within `HomingRange`, inside a cone around your heading,
+  in line of sight) gets a spinning red reticle.
+- **Homing attack:** jump while locked. You fly at the target at `HomingSpeed`, and on contact it's destroyed and you
+  pop up by `HomingBounce`, which is enough to lock and home onto the next one.
+- **Touching enemies:** if you're curled up (jumped), rolling, boosting, stomping or homing, you destroy them. Otherwise
+  you get knocked back and lose a quarter of your heat, then can't be hit for a moment.
+
+Enemies are spawned by `EnemyService` at every part named `EnemySpawn` in the level (the level builder places nine).
+Move the markers around in Studio, or give one a `Patrol` (Vector3) and `PatrolSpeed` attribute to make it drift.
+Anything tagged `HomingTarget` can be locked onto, so later things like soul-chain grapple points can reuse it.
 
 ## Run cycle
 

@@ -1,7 +1,7 @@
 -- Keyboard and gamepad input, collected into one table the controller reads.
 --   Move: WASD / arrows / left stick
---   Jump: Space / A
---   Spin-dash & roll: Q, LeftCtrl or C / X or B
+--   Jump (homing attack / air dash in the air): Space / A
+--   Spin-dash & roll (stomp in the air): Q, LeftCtrl or C / X or B
 --   Boost: LeftShift or E / R2 or Y
 --   Respawn: R / Select
 
@@ -37,6 +37,7 @@ function InputState.new()
 		jumpHeld = false,
 		jumpPressed = false,
 		rollHeld = false,
+		rollPressed = false,
 		boostHeld = false,
 	}
 	self.stick = Vector2.zero
@@ -48,6 +49,14 @@ function InputState.new()
 		end
 		if io.KeyCode == Enum.KeyCode.Space or io.KeyCode == Enum.KeyCode.ButtonA then
 			self.state.jumpPressed = true
+		elseif
+			io.KeyCode == Enum.KeyCode.Q
+			or io.KeyCode == Enum.KeyCode.LeftControl
+			or io.KeyCode == Enum.KeyCode.C
+			or io.KeyCode == Enum.KeyCode.ButtonX
+			or io.KeyCode == Enum.KeyCode.ButtonB
+		then
+			self.state.rollPressed = true
 		elseif io.KeyCode == Enum.KeyCode.R or io.KeyCode == Enum.KeyCode.ButtonSelect then
 			self.respawnRequested = true
 		end

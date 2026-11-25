@@ -1,6 +1,7 @@
 -- Procedurally builds "Circle 0: The Test Pit", a small course for the momentum
 -- controller: a starting drop, a hill, a loop, a launch ramp, a long wall-run
--- quarter pipe on the left, and a big quarter pipe at the end.
+-- quarter pipe on the left, and a big quarter pipe at the end. It also places
+-- invisible "EnemySpawn" markers that EnemyService fills with enemies.
 -- The level floats over a lava sea; falling in respawns you.
 
 local Lighting = game:GetService("Lighting")
@@ -110,6 +111,27 @@ local function strip(parent: Instance, from: Vector3, to: Vector3, width: number
 		CanQuery = false,
 		CanTouch = false,
 	})
+end
+
+-- Invisible marker; EnemyService spawns an enemy here. Move these around in Studio.
+local function enemySpawn(parent: Instance, position: Vector3, patrol: Vector3?, patrolSpeed: number?)
+	local marker = newPart(parent, {
+		Name = "EnemySpawn",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.one * 2,
+		Position = position,
+		Transparency = 1,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	if patrol then
+		marker:SetAttribute("Patrol", patrol)
+	end
+	if patrolSpeed then
+		marker:SetAttribute("PatrolSpeed", patrolSpeed)
+	end
+	return marker
 end
 
 local function buildLoop(parent: Instance, cx: number, radius: number, zStart: number, zEnd: number)
@@ -285,6 +307,28 @@ function LevelBuilder.Build(): Folder
 		plank(level, at(90), W(xm, 80, cz - r), Vector3.zAxis, len, 3, { Name = "WallRunWall", Color = COLOR.pipe })
 		sign(level, W(180, 20, -50), "WALL RUN: steer left into the curve at speed")
 		strip(level, W(150, 0, -45), W(700, 0, -45), 1)
+	end
+
+	-- 7. Enemies
+	do
+		local spawns = Instance.new("Folder")
+		spawns.Name = "EnemySpawns"
+		spawns.Parent = level
+		-- Ground imps after the drop: roll, boost or jump through them, don't just run in
+		enemySpawn(spawns, W(160, 4, -6), Vector3.new(0, 0, 6), 1.2)
+		enemySpawn(spawns, W(178, 4, 6), Vector3.new(0, 0, -6), 1.2)
+		-- One hovering over the hill top: jump and home in
+		enemySpawn(spawns, W(280, 32, 0))
+		-- Homing chain off the launch ramp: home, bounce, home, bounce...
+		enemySpawn(spawns, W(625, 30, 16))
+		enemySpawn(spawns, W(660, 38, 16))
+		enemySpawn(spawns, W(695, 32, 16))
+		-- Guards in front of the quarter pipe
+		enemySpawn(spawns, W(735, 4, 0), Vector3.new(0, 0, 14), 0.8)
+		-- Along the wall run, for homing off the wall
+		enemySpawn(spawns, W(420, 34, -78), Vector3.new(20, 0, 0), 0.6)
+		enemySpawn(spawns, W(540, 40, -78), Vector3.new(20, 0, 0), 0.6)
+		sign(level, W(625, 44, 16), "HOMING CHAIN: jump off the ramp, tap jump on each imp")
 	end
 
 	setupLighting()

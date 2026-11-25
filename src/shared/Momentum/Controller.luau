@@ -76,6 +76,16 @@ function Controller.new(character: Model, humanoid: Humanoid, root: BasePart)
 	self.boosting = false
 	self.heat = 0
 
+	-- Air moves and homing attack
+	self.airDashed = false
+	self.stomping = false
+	self.homingTarget = nil -- BasePart we're flying at
+	self.homingTime = 0
+	self.lockTarget = nil -- set each frame by the lock-on system
+	self.attackTimer = 0 -- brief window after an attack where touching an enemy still defeats it
+	self.hurtTimer = 0
+	self.onEnemyHit = nil -- callback(part) when a homing attack connects
+
 	self.spawnPosition = root.Position
 	self.spawnFacing = self.facing
 
@@ -84,6 +94,7 @@ function Controller.new(character: Model, humanoid: Humanoid, root: BasePart)
 		jumpHeld = false,
 		jumpPressed = false,
 		rollHeld = false,
+		rollPressed = false,
 		boostHeld = false,
 	}
 
@@ -146,17 +157,32 @@ function Controller:Step(dt: number, camCF: CFrame)
 	dt = math.min(dt, 1 / 20)
 	local input = self.input
 	self.airGrace = math.max(0, self.airGrace - dt)
+	self.attackTimer = math.max(0, self.attackTimer - dt)
+	self.hurtTimer = math.max(0, self.hurtTimer - dt)
 
 	local planeUp = if self.grounded then self.up else WORLD_UP
 	local wish = self:GetWishDirection(camCF, planeUp)
 
-	-- Jump, or rev the spin-dash while charging
+	-- Jump, or rev the spin-dash while charging. In the air: homing attack if an
+	-- enemy is locked on, otherwise a one-time air dash.
 	if input.jumpPressed then
 		input.jumpPressed = false
 		if self.charging then
 			self.spinCharge = math.min(1, self.spinCharge + Config.SpinRevBonus)
 		elseif self.grounded then
 			self:Jump()
+		elseif not self.homingTarget then
+			if self.lockTarget then
+				self:StartHoming(self.lockTarget)
+			elseif not self.airDashed then
+				self:AirDash(wish)
+			end
+		end
+	end
+	if input.rollPressed then
+		input.rollPressed = false
+		if not self.grounded and not self.homingTarget and not self.stomping then
+			self:Stomp()
 		end
 	end
 	if self.jumping then
@@ -174,7 +200,9 @@ function Controller:Step(dt: number, camCF: CFrame)
 	self:UpdateRollAndCharge(dt, wish)
 	self:UpdateBoostAndHeat(dt)
 
-	if self.grounded then
+	if self.homingTarget then
+		self:UpdateHoming(dt)
+	elseif self.grounded then
 		self:GroundMovement(dt, wish)
 	else
 		self:AirMovement(dt, wish)
@@ -195,6 +223,9 @@ function Controller:Step(dt: number, camCF: CFrame)
 			self:ProbeGround(sdt)
 		else
 			self:ProbeLanding(sdt)
+		end
+		if self.homingTarget then
+			self:CheckHomingHit()
 		end
 	end
 
@@ -267,7 +298,11 @@ end
 
 function Controller:UpdateBoostAndHeat(dt: number)
 	local speed = self.velocity.Magnitude
-	local want = self.input.boostHeld and not self.charging and self.heat > 0
+	local want = self.input.boostHeld
+		and not self.charging
+		and not self.stomping
+		and self.homingTarget == nil
+		and self.heat > 0
 	if want and not self.boosting and self.heat < Config.BoostMinHeat then
 		want = false
 	end
@@ -375,21 +410,160 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 	self.velocity = vel
 end
 
+-- Air control: bend your flight path toward the stick (limited turn rate, so
+-- speed carries you), speed up to TopSpeed, brake by pulling back, and bleed off
+-- a little extra speed above TopSpeed.
 function Controller:AirMovement(dt: number, wish: Vector3)
 	local vel = self.velocity + Vector3.new(0, -Config.Gravity * dt, 0)
-	if wish.Magnitude > 0.05 then
-		local h = flatten(vel)
-		local cap = math.max(h.Magnitude, Config.TopSpeed)
-		local nh = h + flatten(wish) * Config.AirAccel * dt
-		if nh.Magnitude > cap then
-			nh = nh.Unit * cap
+	if self.stomping then
+		self.velocity = vel
+		return
+	end
+
+	local h = flatten(vel)
+	local hs = h.Magnitude
+	local amount = wish.Magnitude
+	if amount > 0.05 then
+		local w = flatten(wish) / amount
+		if hs > 5 then
+			local dir = h / hs
+			if w:Dot(dir) < -0.5 then
+				hs = math.max(0, hs - Config.AirBrake * amount * dt)
+			else
+				dir = rotateToward(dir, w, WORLD_UP, Config.AirTurnRate * amount * dt)
+				if hs < Config.TopSpeed then
+					hs = math.min(Config.TopSpeed, hs + Config.AirAccel * amount * dt)
+				end
+			end
+			h = dir * hs
+		else
+			h += w * Config.AirAccel * amount * dt
 		end
-		vel = Vector3.new(nh.X, vel.Y, nh.Z)
 	end
-	if vel.Y < -Config.TerminalVelocity then
-		vel = Vector3.new(vel.X, -Config.TerminalVelocity, vel.Z)
+
+	hs = h.Magnitude
+	if hs > Config.TopSpeed and not self.boosting then
+		h *= math.max(Config.TopSpeed, hs - Config.AirDrag * dt) / hs
 	end
+
+	vel = Vector3.new(h.X, math.max(vel.Y, -Config.TerminalVelocity), h.Z)
 	self.velocity = vel
+end
+
+function Controller:AirDash(wish: Vector3)
+	local dir = safeUnit(flatten(wish), nil)
+		or safeUnit(flatten(self.velocity), nil)
+		or safeUnit(flatten(self.facing), Vector3.xAxis)
+	local speed = math.max(flatten(self.velocity).Magnitude, Config.AirDashSpeed)
+	self.velocity = dir * speed + Vector3.new(0, Config.AirDashLift, 0)
+	self.facing = dir
+	self.airDashed = true
+	self.ball = true
+	self.jumping = false
+	self.attackTimer = 0.3
+end
+
+function Controller:Stomp()
+	self.velocity = Vector3.new(0, -Config.StompSpeed, 0)
+	self.stomping = true
+	self.ball = true
+	self.jumping = false
+	self.boosting = false
+end
+
+function Controller:StartHoming(target: BasePart)
+	self.homingTarget = target
+	self.homingTime = 0
+	self.ball = true
+	self.jumping = false
+	self.stomping = false
+end
+
+function Controller:CancelHoming()
+	self.homingTarget = nil
+	self.attackTimer = 0.2
+end
+
+local function targetAlive(part: BasePart?): boolean
+	return part ~= nil and part.Parent ~= nil and part:IsDescendantOf(Workspace) and not part:GetAttribute("Defeated")
+end
+
+function Controller:UpdateHoming(dt: number)
+	local target = self.homingTarget
+	self.homingTime += dt
+	if not targetAlive(target) or self.homingTime > Config.HomingMaxTime then
+		self:CancelHoming()
+		return
+	end
+	local to = target.Position - self.position
+	local dir = safeUnit(to, nil)
+	if dir then
+		self.velocity = dir * Config.HomingSpeed
+		self.facing = safeUnit(flatten(dir), self.facing)
+	end
+end
+
+function Controller:CheckHomingHit()
+	local target = self.homingTarget
+	if target and (target.Position - self.position).Magnitude <= Config.HomingHitRadius then
+		self:HomingHit(target)
+	end
+end
+
+function Controller:HomingHit(target: BasePart)
+	local side = safeUnit(flatten(target.Position - self.position), Vector3.zero)
+	self.homingTarget = nil
+	self.velocity = WORLD_UP * Config.HomingBounce + side * 12
+	self.grounded = false
+	self.groundPart = nil
+	self.airDashed = false
+	self.stomping = false
+	self.ball = true
+	self.attackTimer = 0.25
+	self.airGrace = 0.1
+	if self.onEnemyHit then
+		self.onEnemyHit(target)
+	end
+end
+
+-- True while touching an enemy should defeat it rather than hurt you.
+function Controller:IsAttacking(): boolean
+	return self.ball
+		or self.rolling
+		or self.charging
+		or self.boosting
+		or self.stomping
+		or self.homingTarget ~= nil
+		or self.attackTimer > 0
+end
+
+-- Defeated an enemy by touching it (jumping, rolling, boosting into it).
+function Controller:BounceOff()
+	if not self.grounded then
+		self.velocity = Vector3.new(self.velocity.X, math.max(self.velocity.Y, Config.HomingBounce * 0.8), self.velocity.Z)
+		self.airDashed = false
+		self.stomping = false
+	end
+end
+
+-- An enemy hit you: get knocked away and lose some heat.
+function Controller:Hurt(from: Vector3)
+	if self.hurtTimer > 0 then
+		return
+	end
+	local away = safeUnit(flatten(self.position - from), nil) or -safeUnit(flatten(self.facing), Vector3.xAxis)
+	self.velocity = away * Config.EnemyKnockback + WORLD_UP * 30
+	self.position += WORLD_UP * 0.3
+	self.grounded = false
+	self.groundPart = nil
+	self.rolling = false
+	self.charging = false
+	self.boosting = false
+	self.ball = false
+	self.homingTarget = nil
+	self.airGrace = 0.2
+	self.hurtTimer = Config.HurtInvulnerability
+	self.heat = math.max(0, self.heat - Config.EnemyHeatLoss)
 end
 
 -- Sweep the body sphere along `motion`, sliding along walls and climbing onto
@@ -478,6 +652,12 @@ function Controller:Land(n: Vector3, part: Instance?)
 	self.grounded = true
 	self.jumping = false
 	self.ball = false
+	self.airDashed = false
+	if self.stomping or self.homingTarget then
+		self.attackTimer = 0.15 -- a stomp still flattens whatever you land next to
+	end
+	self.stomping = false
+	self.homingTarget = nil
 	self.rolling = self.input.rollHeld and self.velocity.Magnitude >= Config.RollMinSpeed
 end
 
@@ -504,6 +684,9 @@ function Controller:Respawn()
 	self.charging = false
 	self.boosting = false
 	self.ball = false
+	self.airDashed = false
+	self.stomping = false
+	self.homingTarget = nil
 	self.heat = 0
 	self.respawnCount = (self.respawnCount or 0) + 1
 end
