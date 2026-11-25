@@ -71,6 +71,21 @@ The tutorial is one huge, twisting speed course (about 12,900 studs, on a 60-stu
 
 The scale is set by `K` (1.6) at the top of `LevelBuilder.luau`: it stretches road lengths, slopes and curves, while jump gaps and launch ramps keep their size so every jump needs the same speed and timing. Edge curbs line the curves and funnel you into the loops and the corkscrew. Missing a jump respawns you at your last checkpoint as soon as you've fallen 100 studs.
 
+
+### Art style
+
+The level goes for a stylized, PS2-era look to match the soundtrack: flat painted colors and bold shapes rather
+than realistic materials. All of it lives in `LevelBuilder.luau` (the `COLOR` table and `setupLighting`):
+
+- Roads are flat brick-red stripes, orange slopes, crimson loops and purple branch routes, edged with glowing
+  orange lava trim. Nothing uses blue or cyan, so cyan Ash always stands out.
+- Canyon walls and lava spires are chunky stacked slabs of plum and red rock that step back from the road.
+- The sky is a purple cloud ceiling over a thick orange haze, so it fades from purple overhead to orange at the
+  horizon, and distant shapes melt into the haze.
+- Bloom on the neon lava and lights, plus a saturation and contrast boost.
+- Big set pieces stay well clear of every route: floating rock islands with glowing undersides, giant chains
+  hanging out of the sky into the lava, and obsidian towers with glowing bands around the horizon.
+
 ## How it works (short version)
 
 - The Humanoid is put in the `Physics` state so it does nothing. Every frame, just before physics, the client
@@ -135,6 +150,11 @@ Anything tagged `HomingTarget` can be locked onto, so later things like soul-cha
 While running, the arms work cartoon style: one is thrust forward while the other is flung back, and they hold
 those poses and snap across in time with the stride (`RunCycleArmSnap`). They also float a little away from the
 shoulders, sliding toward where they point (`RunCycleArmDetach`, 0.04 studs).
+
+The arms hang from the torso, so the deep lean at speed would swing them up behind him. Instead, any arm
+swinging back past `RunCycleArmSoftBack` (1.0 radians from straight down) is eased toward `RunCycleArmMaxBack`
+(1.4, just under level), and the top-speed arms-back pose is aimed against the road rather than the torso, so at
+any lean the arms trail out behind him.
 
 At speed the whole body banks into turns like a bike, more the faster and tighter the turn
 (`RunCycleBank`, capped at `RunCycleBankMax` = 0.48 radians).

@@ -1000,8 +1000,12 @@ local Config = {
 	RunCycleTopStart = 100, -- starts blending in here (running tops out at 90)
 	RunCycleTopFull = 150, -- fully in by this speed
 	RunCycleTopLean = 0.5, -- extra forward tilt of the torso, radians
-	RunCycleTopArmBack = 1.35, -- how far back the arms sweep, radians
+	RunCycleTopArmBack = 1.3, -- how far back the arms sweep, radians from hanging straight down (pi/2 = level with the road)
 	RunCycleTopArmOut = 0.2, -- arms angle slightly out from the body, radians
+	-- At any lean, an arm swinging back past ArmSoftBack (radians from straight down) is eased
+	-- toward ArmMaxBack, so the arms trail out behind him instead of sticking up
+	RunCycleArmSoftBack = 1.0,
+	RunCycleArmMaxBack = 1.4,
 	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
 	RunCycleBankMax = 0.48, -- radians, the most it ever banks
 	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders
@@ -2746,7 +2750,8 @@ end
 function RunCycle:ApplyTopSpeed(pose, k: number)
 	local C = Config
 	self:ApplyLean(pose, C.RunCycleTopLean * k)
-	local back = C.RunCycleTopArmBack + 0.06 * math.sin(self.phase * 2)
+	-- The target is measured against the road, not the torso, so a deeper lean never lifts the arms
+	local back = C.RunCycleTopArmBack - self:TorsoLean(pose) + 0.06 * math.sin(self.phase * 2)
 	local out = C.RunCycleTopArmOut
 	local armL = rot(0, 0, -out) * rot(-back, 0, 0)
 	local armR = rot(0, 0, out) * rot(-back, 0, 0)
@@ -2763,6 +2768,44 @@ function RunCycle:ApplyTopSpeed(pose, k: number)
 		pose.RightShoulder = pose.RightShoulder:Lerp(armR, k)
 		pose.LeftElbow = pose.LeftElbow:Lerp(rot(0.15, 0, 0), k)
 		pose.RightElbow = pose.RightElbow:Lerp(rot(0.15, 0, 0), k)
+	end
+end
+
+-- How far the torso is tipped forward from upright (radians), read from the root pose
+function RunCycle:TorsoLean(pose): number
+	local root = self.motors.RootJoint
+	if not (self.r6 and root and pose.RootJoint) then
+		return 0
+	end
+	local up = (root.C0 * pose.RootJoint * root.C1:Inverse()).UpVector
+	return math.atan2(-up.Z, up.Y)
+end
+
+-- The arms hang from the torso, so a deep forward lean swings them up behind him. Measure
+-- where each arm really points (against the body's heading, 0 = straight down, pi/2 = level
+-- with the road behind him) and ease anything past RunCycleArmSoftBack down toward
+-- RunCycleArmMaxBack, so the arms trail out behind him instead of sticking up.
+function RunCycle:LimitArmsBack(pose)
+	local C = Config
+	local root = self.motors.RootJoint
+	if not (self.r6 and root and pose.RootJoint) then
+		return
+	end
+	local torso = root.C0 * pose.RootJoint * root.C1:Inverse()
+	local start, limit = C.RunCycleArmSoftBack, C.RunCycleArmMaxBack
+	for _, name in { "Left Shoulder", "Right Shoulder" } do
+		local joint = self.motors[name]
+		if joint and pose[name] then
+			local down = -(torso * joint.C0 * pose[name] * joint.C1:Inverse()).UpVector
+			local back = math.atan2(down.Z, -down.Y)
+			if back > start then
+				local eased = start + (limit - start) * math.tanh((back - start) / (limit - start))
+				local f = self.frames[name]
+				-- Swing it forward about the body's side-to-side axis (the torso may be twisted)
+				local axis = torso:VectorToObjectSpace(Vector3.xAxis)
+				pose[name] = f:Inverse() * CFrame.fromAxisAngle(axis, back - eased) * f * pose[name]
+			end
+		end
 	end
 end
 
@@ -2816,6 +2859,7 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 	if top > 0.001 then
 		self:ApplyTopSpeed(pose, top)
 	end
+	self:LimitArmsBack(pose)
 	for name, joint in self.motors do
 		joint.Transform = CFrame.identity:Lerp(pose[name], self.weight)
 	end
@@ -3505,21 +3549,29 @@ local LW = ROAD / 40 -- sideways offsets (branches, signs) were laid out for a 4
 local STEP = 8 -- longest road piece on straights, studs
 local TURN_STEP = math.rad(5) -- curve resolution
 
+-- Art direction: a stylized, PS2-era hell. Flat painted colors with strong contrast
+-- (plum and obsidian rock, brick-red and orange roads, glowing lava trims) under a
+-- purple-to-orange sky. Ash is electric cyan, so nothing in the level uses blue or cyan.
 local COLOR = {
-	rock = Color3.fromRGB(48, 28, 28),
-	pillar = Color3.fromRGB(36, 22, 24),
-	track = Color3.fromRGB(92, 42, 34),
-	track2 = Color3.fromRGB(104, 48, 38),
-	branch = Color3.fromRGB(70, 36, 46),
-	slope = Color3.fromRGB(122, 52, 36),
-	loop = Color3.fromRGB(145, 32, 26),
-	pipe = Color3.fromRGB(78, 34, 42),
-	hurdle = Color3.fromRGB(72, 32, 32),
-	trim = Color3.fromRGB(255, 110, 30),
-	branchTrim = Color3.fromRGB(255, 60, 90),
-	gold = Color3.fromRGB(255, 195, 80),
-	lava = Color3.fromRGB(255, 85, 20),
+	rock = Color3.fromRGB(118, 44, 88), -- plum obsidian
+	rock2 = Color3.fromRGB(156, 52, 58), -- red rock band
+	pillar = Color3.fromRGB(72, 30, 66), -- dark obsidian
+	track = Color3.fromRGB(176, 64, 40), -- brick-red road, alternating stripes
+	track2 = Color3.fromRGB(198, 82, 44),
+	branch = Color3.fromRGB(122, 48, 128), -- purple side routes
+	slope = Color3.fromRGB(226, 112, 40), -- orange slopes
+	loop = Color3.fromRGB(214, 38, 58), -- crimson loops
+	pipe = Color3.fromRGB(104, 40, 116),
+	hurdle = Color3.fromRGB(160, 40, 44),
+	trim = Color3.fromRGB(255, 92, 24), -- glowing lava trim
+	branchTrim = Color3.fromRGB(255, 70, 170),
+	gold = Color3.fromRGB(255, 214, 70),
+	lava = Color3.fromRGB(255, 96, 12),
+	iron = Color3.fromRGB(52, 40, 58), -- giant chains
 }
+-- Painted, low-detail surfaces: roads are flat color, rock gets a chunky slate texture
+local ROAD_MATERIAL = Enum.Material.SmoothPlastic
+local ROCK_MATERIAL = Enum.Material.Slate
 
 local Y = Vector3.yAxis
 
@@ -3528,7 +3580,7 @@ local function newPart(parent: Instance, props): Part
 	p.Anchored = true
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
-	p.Material = Enum.Material.Basalt
+	p.Material = ROCK_MATERIAL
 	p.Color = COLOR.rock
 	for k, v in props do
 		p[k] = v
@@ -3542,6 +3594,27 @@ local function deco(props)
 	props.CanQuery = false
 	props.CanTouch = false
 	return props
+end
+
+-- A chunky low-poly rock column: a few stacked blocks, each narrower and twisted a little,
+-- so it reads as a bold jagged silhouette. 'away' (optional) is the direction the upper
+-- tiers step back toward, so walls never lean in over the road.
+local function chunkyColumn(parent: Instance, rng: Random, name: string, baseCF: CFrame, size: Vector3, tiers: number, colors, away: Vector3?)
+	local y = 0
+	local h = size.Y
+	for t = 1, tiers do
+		local share = if t == tiers then h - y else (h - y) * rng:NextNumber(0.45, 0.62)
+		local shrink = 1 - (t - 1) * 0.2
+		local step = if away then away * (t - 1) * size.X * 0.12 else Vector3.zero
+		local twist = CFrame.Angles(rng:NextNumber(-0.06, 0.06), rng:NextNumber(-0.25, 0.25), rng:NextNumber(-0.06, 0.06))
+		newPart(parent, deco({
+			Name = name,
+			Size = Vector3.new(size.X * shrink, share, size.Z * shrink),
+			CFrame = (baseCF + step) * CFrame.new(0, y + share / 2, 0) * twist,
+			Color = colors[rng:NextInteger(1, #colors)],
+		}))
+		y += share
+	end
 end
 
 local function ease(t: number): number
@@ -3850,7 +3923,7 @@ local function buildRibbon(parent: Instance, pts, width: number, props, trimColo
 			local p = plank(parent, a.pos, b.pos, up, w, 3, {
 				Name = b.name or props.Name,
 				Color = b.color or props.Color or (if i % 2 == 0 then COLOR.track else COLOR.track2),
-				Material = props.Material or Enum.Material.Basalt,
+				Material = props.Material or ROAD_MATERIAL,
 			}, extra)
 			if p then
 				if b.guide then
@@ -4142,12 +4215,9 @@ local function buildCliffs(parent: Instance, road, routes, floorY: number)
 				local top = pos.Y + rng:NextNumber(90, 240)
 				local height = top - floorY
 				local cf = CFrame.lookAt(Vector3.new(c.X, floorY + height / 2, c.Z), Vector3.new(c.X, floorY + height / 2, c.Z) + h)
-				newPart(folder, deco({
-					Name = "Cliff",
-					Size = Vector3.new(THICK, height, SPACING + 10),
-					CFrame = cf,
-					Color = if rng:NextNumber() < 0.5 then COLOR.rock else COLOR.pillar,
-				}))
+				-- Chunky stacked tiers that step back away from the road as they rise
+				chunkyColumn(folder, rng, "Cliff", CFrame.lookAt(Vector3.new(c.X, floorY, c.Z), Vector3.new(c.X, floorY, c.Z) + h),
+					Vector3.new(THICK, height, SPACING + 10), rng:NextInteger(2, 3), { COLOR.rock, COLOR.rock2, COLOR.pillar }, right * side)
 				-- A glowing seam along the inner face, level with the road, for a sense of speed
 				newPart(folder, deco({
 					Name = "CliffGlow",
@@ -4161,12 +4231,88 @@ local function buildCliffs(parent: Instance, road, routes, floorY: number)
 	end
 end
 
--- Decorative volcanic spires rising out of the lava sea, kept clear of the routes.
-local function buildScenery(parent: Instance, minC: Vector3, maxC: Vector3, routes, floorY: number)
+-- Is a point (x, z) at least 'gap' studs from every route point?
+local function clearOf(routes, x: number, z: number, gap: number): boolean
+	for _, p in routes do
+		local dx, dz = p.X - x, p.Z - z
+		if dx * dx + dz * dz < gap * gap then
+			return false
+		end
+	end
+	return true
+end
+
+-- One giant chain hanging from the sky into the lava: alternating links of four bars
+local function giantChain(parent: Instance, x: number, z: number, topY: number, bottomY: number, yaw: number)
+	local LINK, WIDE, BAR = 46, 26, 6
+	local pitch = LINK - BAR * 2 -- links overlap so they read as interlocked
+	local y = topY
+	local n = 0
+	while y > bottomY do
+		local cf = CFrame.new(x, y - LINK / 2, z) * CFrame.Angles(0, yaw + (n % 2) * math.pi / 2, 0)
+		for _, side in { -1, 1 } do
+			newPart(parent, deco({
+				Name = "ChainLink",
+				Size = Vector3.new(BAR, LINK, BAR),
+				CFrame = cf * CFrame.new(side * (WIDE - BAR) / 2, 0, 0),
+				Material = Enum.Material.Metal,
+				Color = COLOR.iron,
+			}))
+			newPart(parent, deco({
+				Name = "ChainLink",
+				Size = Vector3.new(WIDE, BAR, BAR),
+				CFrame = cf * CFrame.new(0, side * (LINK - BAR) / 2, 0),
+				Material = Enum.Material.Metal,
+				Color = COLOR.iron,
+			}))
+		end
+		y -= pitch
+		n += 1
+	end
+end
+
+-- A distant obsidian tower: stacked tiers with glowing window bands and a spike on top
+local function hellTower(parent: Instance, rng: Random, x: number, z: number, floorY: number, height: number)
+	local base = CFrame.new(x, floorY, z) * CFrame.Angles(0, rng:NextNumber(0, math.pi), 0)
+	local w = rng:NextNumber(70, 110)
+	local y = 0
+	local tiers = 4
+	for t = 1, tiers do
+		local h = height / tiers * (1.25 - (t - 1) * 0.15)
+		local tw = w * (1 - (t - 1) * 0.2)
+		newPart(parent, deco({
+			Name = "Tower",
+			Size = Vector3.new(tw, h, tw),
+			CFrame = base * CFrame.new(0, y + h / 2, 0),
+			Color = if t % 2 == 0 then COLOR.pillar else COLOR.rock,
+		}))
+		-- Glowing window band near the top of each tier
+		newPart(parent, deco({
+			Name = "TowerGlow",
+			Size = Vector3.new(tw + 1, 5, tw + 1),
+			CFrame = base * CFrame.new(0, y + h * 0.8, 0),
+			Material = Enum.Material.Neon,
+			Color = COLOR.trim,
+		}))
+		y += h
+	end
+	newPart(parent, deco({
+		Name = "TowerSpike",
+		Size = Vector3.new(w * 0.18, height * 0.3, w * 0.18),
+		CFrame = base * CFrame.new(0, y + height * 0.15, 0) * CFrame.Angles(0, math.pi / 4, 0),
+		Color = COLOR.pillar,
+	}))
+end
+
+-- Big set pieces around the course: chunky lava spires, floating rock islands with glowing
+-- undersides, giant chains hanging from the sky, and obsidian towers on the horizon.
+-- All decoration, kept clear of every route.
+local function buildScenery(parent: Instance, minC: Vector3, maxC: Vector3, routes, floorY: number, topY: number)
 	local folder = Instance.new("Folder")
 	folder.Name = "Scenery"
 	folder.Parent = parent
 	local rng = Random.new(666)
+	-- Lava spires
 	local placed = 0
 	for _ = 1, 400 do
 		if placed >= 46 then
@@ -4174,56 +4320,129 @@ local function buildScenery(parent: Instance, minC: Vector3, maxC: Vector3, rout
 		end
 		local x = rng:NextNumber(minC.X, maxC.X)
 		local z = rng:NextNumber(minC.Z, maxC.Z)
-		local size = rng:NextNumber(16, 30)
-		local clear = true
-		for _, p in routes do
-			if (Vector3.new(p.X, 0, p.Z) - Vector3.new(x, 0, z)).Magnitude < size + 45 then
-				clear = false
-				break
-			end
-		end
-		if clear then
+		local size = rng:NextNumber(20, 38)
+		if clearOf(routes, x, z, size + 50) then
 			placed += 1
-			local h = rng:NextNumber(160, 300)
-			newPart(folder, deco({
-				Name = "Spire",
-				Size = Vector3.new(size, h, size),
-				CFrame = CFrame.new(x, floorY + h / 2, z) * CFrame.Angles(0, rng:NextNumber(0, math.pi), 0),
-				Color = COLOR.pillar,
-			}))
+			local h = rng:NextNumber(160, 320)
+			chunkyColumn(folder, rng, "Spire", CFrame.new(x, floorY, z), Vector3.new(size, h, size), 3, { COLOR.pillar, COLOR.rock, COLOR.rock2 })
 			newPart(folder, deco({
 				Name = "LavaRing",
-				Size = Vector3.new(size + 1, 2.5, size + 1),
+				Size = Vector3.new(size + 2, 3, size + 2),
 				CFrame = CFrame.new(x, floorY + rng:NextNumber(12, 50), z),
 				Material = Enum.Material.Neon,
 				Color = COLOR.trim,
 			}))
 		end
 	end
+	-- Floating rock islands: upside-down chunky rocks with lava glowing underneath
+	placed = 0
+	for _ = 1, 400 do
+		if placed >= 28 then
+			break
+		end
+		local x = rng:NextNumber(minC.X, maxC.X)
+		local z = rng:NextNumber(minC.Z, maxC.Z)
+		local size = rng:NextNumber(40, 90)
+		if clearOf(routes, x, z, size + 110) then
+			placed += 1
+			local y = rng:NextNumber(minC.Y + 60, topY + 120)
+			local h = size * rng:NextNumber(0.9, 1.5)
+			-- Built upward from the bottom tip, then flipped, so the wide end is on top
+			chunkyColumn(folder, rng, "FloatingRock", CFrame.new(x, y, z) * CFrame.Angles(math.pi, rng:NextNumber(0, math.pi), 0),
+				Vector3.new(size, h, size), 3, { COLOR.rock, COLOR.rock2, COLOR.pillar })
+			newPart(folder, deco({
+				Name = "FloatingRockTop",
+				Size = Vector3.new(size * 1.05, 4, size * 1.05),
+				CFrame = CFrame.new(x, y + 2, z) * CFrame.Angles(0, rng:NextNumber(0, math.pi), 0),
+				Color = COLOR.rock2,
+			}))
+			newPart(folder, deco({
+				Name = "FloatingRockGlow",
+				Size = Vector3.new(size * 0.35, 3, size * 0.35),
+				CFrame = CFrame.new(x, y - h - 1, z),
+				Material = Enum.Material.Neon,
+				Color = COLOR.lava,
+			}))
+		end
+	end
+	-- Giant chains hanging out of the sky
+	placed = 0
+	for _ = 1, 300 do
+		if placed >= 9 then
+			break
+		end
+		local x = rng:NextNumber(minC.X, maxC.X)
+		local z = rng:NextNumber(minC.Z, maxC.Z)
+		if clearOf(routes, x, z, 140) then
+			placed += 1
+			giantChain(folder, x, z, topY + rng:NextNumber(500, 800), floorY - 10, rng:NextNumber(0, math.pi))
+		end
+	end
+	-- Obsidian towers ringing the horizon, just past the edge of the course
+	local center = (minC + maxC) / 2
+	local radius = math.max(maxC.X - minC.X, maxC.Z - minC.Z) / 2 + 500
+	for k = 1, 14 do
+		local a = (k / 14) * math.pi * 2 + rng:NextNumber(-0.15, 0.15)
+		local r = radius + rng:NextNumber(0, 400)
+		local x, z = center.X + math.cos(a) * r, center.Z + math.sin(a) * r
+		local height = topY - floorY + rng:NextNumber(250, 600)
+		if clearOf(routes, x, z, 200) then
+			hellTower(folder, rng, x, z, floorY, height)
+		end
+	end
 end
 
+-- Purple-to-orange sky, heavy colored haze that swallows the distance, saturated grading
+-- and strong bloom on lava and lights
 local function setupLighting()
-	Lighting.ClockTime = 0
-	Lighting.Brightness = 1.5
-	Lighting.Ambient = Color3.fromRGB(110, 50, 40)
-	Lighting.OutdoorAmbient = Color3.fromRGB(140, 60, 45)
-	Lighting.EnvironmentDiffuseScale = 0.3
+	Lighting.ClockTime = 17.85 -- dusk: the sun sits just on the horizon, behind the orange haze
+	Lighting.GeographicLatitude = 0
+	Lighting.Brightness = 2.2
+	Lighting.Ambient = Color3.fromRGB(150, 80, 170)
+	Lighting.OutdoorAmbient = Color3.fromRGB(200, 120, 190)
+	Lighting.ColorShift_Top = Color3.fromRGB(255, 150, 80) -- warm light from above
+	Lighting.ColorShift_Bottom = Color3.fromRGB(120, 40, 150) -- purple bounce from below
+	Lighting.EnvironmentDiffuseScale = 0.2
+	Lighting.EnvironmentSpecularScale = 0.2
+	local sky = Lighting:FindFirstChildOfClass("Sky") or Instance.new("Sky")
+	sky.StarCount = 0
+	sky.SunAngularSize = 24 -- a huge low red sun
+	sky.MoonAngularSize = 0
+	sky.Parent = Lighting
 	local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or Instance.new("Atmosphere")
-	atmosphere.Density = 0.3
-	atmosphere.Offset = 0.12
-	atmosphere.Color = Color3.fromRGB(255, 120, 70)
-	atmosphere.Decay = Color3.fromRGB(110, 25, 15)
-	atmosphere.Glare = 0.3
-	atmosphere.Haze = 1.8
+	atmosphere.Density = 0.25
+	atmosphere.Offset = 0.1
+	atmosphere.Color = Color3.fromRGB(255, 120, 65) -- orange haze along the horizon
+	atmosphere.Decay = Color3.fromRGB(130, 40, 160)
+	atmosphere.Glare = 0.6
+	atmosphere.Haze = 2.2
 	atmosphere.Parent = Lighting
-	if not Lighting:FindFirstChild("HellBloom") then
-		local bloom = Instance.new("BloomEffect")
-		bloom.Name = "HellBloom"
-		bloom.Intensity = 0.6
-		bloom.Size = 30
-		bloom.Threshold = 1.4
-		bloom.Parent = Lighting
+	-- A low purple cloud ceiling covers the default skybox, so the sky is purple overhead
+	-- and fades into the orange haze at the horizon from every direction
+	local clouds = Workspace.Terrain:FindFirstChildOfClass("Clouds") or Instance.new("Clouds")
+	clouds.Cover = 0.9
+	clouds.Density = 0.5
+	clouds.Color = Color3.fromRGB(72, 26, 96)
+	clouds.Parent = Workspace.Terrain
+	-- One bloom, tuned for the neon lava; turn off any other bloom so it doesn't stack
+	for _, e in Lighting:GetChildren() do
+		if e:IsA("BloomEffect") and e.Name ~= "HellBloom" then
+			e.Enabled = false
+		end
 	end
+	local bloom = Lighting:FindFirstChild("HellBloom") or Instance.new("BloomEffect")
+	bloom.Name = "HellBloom"
+	bloom.Intensity = 1
+	bloom.Size = 28
+	bloom.Threshold = 0.95
+	bloom.Parent = Lighting
+	local grade = Lighting:FindFirstChild("HellGrade") or Instance.new("ColorCorrectionEffect")
+	grade.Name = "HellGrade"
+	grade.Saturation = 0.25
+	grade.Contrast = 0.12
+	grade.Brightness = 0.02
+	grade.TintColor = Color3.fromRGB(255, 240, 235)
+	grade.Parent = Lighting
 end
 
 -- =============================================================================
@@ -4677,7 +4896,7 @@ function LevelBuilder.Build(): Instance
 			}))
 		end
 	end
-	buildScenery(level, minC - Vector3.new(pad, 0, pad), maxC + Vector3.new(pad, 0, pad), routePts, floorY)
+	buildScenery(level, minC - Vector3.new(pad, 0, pad), maxC + Vector3.new(pad, 0, pad), routePts, floorY, maxC.Y)
 	buildCliffs(level, R, routePts, floorY)
 	setupLighting()
 
