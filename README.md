@@ -126,7 +126,7 @@ Anything tagged `HomingTarget` can be locked onto, so later things like soul-cha
 | Standing | Idle breathing |
 | Up to 20 | Walk: short stride, relaxed arm swing, upright |
 | 20 to 60 | Blends into a run: longer stride, high knee lift, pumping arms, forward lean, bounce |
-| 100 to 150 and up | Sprint: arms swept back, deep lean, full stride |
+| 100 to 150 and up | Sprint: deep lean, full stride, arms snapping forward and back |
 | In the air | Arms out for balance, one knee tucked, a little flail when falling fast |
 
 While running, the arms work cartoon style: one is thrust forward while the other is flung back, and they hold
@@ -137,7 +137,7 @@ Step rate climbs from 1.4 to 5 steps per second and levels off so the legs don't
 Tune it with the `RunCycle*` values in `Config.luau`.
 
 Running and sprinting are cartoon-exaggerated by `RunCycleExaggeration` (1.5): bigger strides with high knees
-(forward swing larger than the back swing), wider arm pumps, arms swept further back at sprint, a deeper lean,
+(forward swing larger than the back swing), wider arm pumps, a deeper lean,
 a bigger bounce on each footfall and a side-to-side hip rock. Walking stays natural. Set it to 1 for the
 realistic gait, or around 2 for very rubbery legs.
 

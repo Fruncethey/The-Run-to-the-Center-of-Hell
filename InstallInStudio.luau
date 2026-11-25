@@ -2216,7 +2216,7 @@ script(f, 'ModuleScript', 'RunCycle', [=====[-- Procedural, speed-driven run cyc
 --   standing  -> idle breathing
 --   0-20      -> walk: short stride, relaxed arms, upright
 --   20-90     -> run: long stride, high knee lift, pumping arms, forward lean, bounce
---   90+       -> sprint: arms swept back, deep lean, legs at full cadence
+--   90+       -> sprint: deep lean, arms snapping forward and back, legs at full cadence
 -- In the air it blends to a fall pose. Tuning lives in Config (RunCycle* values).
 
 local Config = require(script.Parent.Config)
