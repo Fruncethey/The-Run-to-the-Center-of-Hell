@@ -28,8 +28,17 @@ local LevelBuilder = {}
 local ORIGIN = Vector3.new(0, 200, 0)
 local LEVEL_NAME = "HellTestLevel"
 
-local ROAD = 40 -- main road width
-local BRANCH = 30 -- branch road width
+-- Scale of the course. Distances along the road, slope heights and curve radii are
+-- multiplied by K, so the whole course is big and open; jump gaps and launch ramps
+-- are NOT scaled, so every jump still needs the same speed and timing.
+local K = 1.6
+local LOOP_K = 1.3 -- loops grow less, so the run-up they need stays reasonable
+local function L(x: number): number
+	return x * K
+end
+local ROAD = 60 -- main road width
+local BRANCH = 44 -- branch road width
+local LW = ROAD / 40 -- sideways offsets (branches, signs) were laid out for a 40-wide road
 local STEP = 8 -- longest road piece on straights, studs
 local TURN_STEP = math.rad(5) -- curve resolution
 
@@ -210,7 +219,8 @@ end
 -- Straight run, optionally changing height with an eased (S-shaped) profile so it
 -- blends smoothly into whatever comes before and after.
 function Road:Straight(len: number, dy: number?, opts)
-	dy = dy or 0
+	len *= K
+	dy = (dy or 0) * K
 	local h = self:Heading()
 	local start = self.pos
 	local n = math.max(1, math.ceil(len / STEP))
@@ -229,7 +239,8 @@ end
 
 -- Horizontal curve. angle in degrees, positive = left. bank tilts the road into the turn.
 function Road:Curve(angleDeg: number, radius: number, dy: number?, opts)
-	dy = dy or 0
+	radius *= K
+	dy = (dy or 0) * K
 	opts = opts or {}
 	local angle = math.rad(angleDeg)
 	local dir = if angle >= 0 then 1 else -1
@@ -279,6 +290,7 @@ end
 -- The loop is narrower than the road and the shift is wider than the loop, so the
 -- way out never overlaps the way in.
 function Road:Loop(radius: number, shift: number, width: number)
+	radius *= LOOP_K
 	local h = self:Heading()
 	local right = self:Right()
 	local start = self.pos
@@ -295,6 +307,7 @@ end
 
 -- Corkscrew: the road twists a full turn around the direction of travel.
 function Road:Corkscrew(len: number, radius: number, width: number)
+	len *= K
 	local h = self:Heading()
 	local start = self.pos
 	local axis = start + Y * radius
@@ -462,7 +475,7 @@ local function tutorialZones(parent: Instance, road, order: number, title: strin
 		local cf = road:Frame(mid, 0, 40)
 		local zone = newPart(parent, deco({
 			Name = string.format("Zone%d", order),
-			Size = Vector3.new(220, 170 + math.abs(pb.Y - pa.Y), math.max(flatLen, 20) + 30),
+			Size = Vector3.new(360, 220 + math.abs(pb.Y - pa.Y), math.max(flatLen, 20) + 30),
 			CFrame = cf,
 			Transparency = 1,
 		}))
@@ -610,7 +623,7 @@ local function wallRunPipe(parent: Instance, road, s0: number, s1: number)
 	local b = road:At(s1)
 	local len = (b - a).Magnitude
 	local mid = (a + b) / 2
-	local r = 20
+	local r = 28
 	local edge = -right * (ROAD / 2)
 	local function at(deg: number): Vector3
 		local rad = math.rad(deg)
@@ -622,14 +635,67 @@ local function wallRunPipe(parent: Instance, road, s0: number, s1: number)
 		local inward = (mid + edge + Y * r - (p0 + p1) / 2).Unit
 		plank(parent, p0, p1, inward, len, 3, { Name = "WallRunCurve", Color = COLOR.pipe })
 	end
-	plank(parent, at(90), at(90) + Y * 60, right, len, 3, { Name = "WallRunWall", Color = COLOR.pipe })
+	plank(parent, at(90), at(90) + Y * 90, right, len, 3, { Name = "WallRunWall", Color = COLOR.pipe })
 	newPart(parent, deco({
 		Name = "WallRunStripe",
 		Size = Vector3.new(1, 1, len),
-		CFrame = CFrame.lookAt(at(90) + Y * 20 + right * 1.6, at(90) + Y * 20 + right * 1.6 + h),
+		CFrame = CFrame.lookAt(at(90) + Y * 30 + right * 1.6, at(90) + Y * 30 + right * 1.6 + h),
 		Material = Enum.Material.Neon,
 		Color = COLOR.gold,
 	}))
+end
+
+-- Huge canyon walls along both sides of the main road, rising out of the lava,
+-- so the course runs through a vast, enclosed space. A wall is left out anywhere
+-- it would come near another stretch of road or a branch.
+local function buildCliffs(parent: Instance, road, routes, floorY: number)
+	local folder = Instance.new("Folder")
+	folder.Name = "Cliffs"
+	folder.Parent = parent
+	local rng = Random.new(1313)
+	local SPACING = 56
+	local THICK = 34
+	local GAP = 36 -- open space between the road edge and the wall
+	local CLEAR = ROAD / 2 + 50 -- how close any route may come to a wall's middle
+	local flat = {}
+	for i, p in routes do
+		flat[i] = Vector2.new(p.X, p.Z)
+	end
+	local total = road.s
+	for s = SPACING / 2, total - SPACING / 2, SPACING do
+		local pos, h, right = road:At(s)
+		for _, side in { -1, 1 } do
+			local lat = side * (ROAD / 2 + GAP + THICK / 2)
+			local c = pos + right * lat
+			local c2 = Vector2.new(c.X, c.Z)
+			local ok = true
+			for _, q in flat do
+				if (q - c2).Magnitude < CLEAR then
+					ok = false
+					break
+				end
+			end
+			if ok then
+				local top = pos.Y + rng:NextNumber(90, 240)
+				local height = top - floorY
+				local cf = CFrame.lookAt(Vector3.new(c.X, floorY + height / 2, c.Z), Vector3.new(c.X, floorY + height / 2, c.Z) + h)
+				newPart(folder, deco({
+					Name = "Cliff",
+					Size = Vector3.new(THICK, height, SPACING + 10),
+					CFrame = cf,
+					Color = if rng:NextNumber() < 0.5 then COLOR.rock else COLOR.pillar,
+				}))
+				-- A glowing seam along the inner face, level with the road, for a sense of speed
+				newPart(folder, deco({
+					Name = "CliffGlow",
+					Size = Vector3.new(1, 1.5, SPACING + 10),
+					CFrame = CFrame.new(Vector3.new(c.X, pos.Y + 14, c.Z) - right * side * (THICK / 2 + 0.3)) * cf.Rotation,
+					Material = Enum.Material.Neon,
+					Color = COLOR.trim,
+				}))
+			end
+		end
+	end
 end
 
 -- Decorative volcanic spires rising out of the lava sea, kept clear of the routes.
@@ -742,11 +808,11 @@ function LevelBuilder.Build(): Instance
 	-- ---------------------------------------------------------------- STAGE 1
 	stage[1] = R:Mark("s1")
 	R:Straight(200)
-	local hurdle1 = R.s - 50
+	local hurdle1 = R.s - L(50)
 	R:Gap(26)
 	local landing1 = R:Mark("landing1")
 	R:Straight(120)
-	local hurdle2 = landing1 + 55
+	local hurdle2 = landing1 + L(55)
 	R:Curve(-60, 190, 0, { curb = -1 })
 	R:Straight(70)
 	local cp1 = R.s - 20
@@ -771,14 +837,14 @@ function LevelBuilder.Build(): Instance
 		table.insert(branches, {
 			name = "HighRidge",
 			keys = {
-				{ s = valley + 10, lat = 0 },
-				{ s = valley + 120, lat = -46, y = yv + 8 },
-				{ s = hills + 120, lat = -62, y = yv + 52 },
-				{ s = hills + 380, lat = -62, y = yv + 52 },
+				{ s = valley + L(10), lat = 0 },
+				{ s = valley + L(120), lat = -46 * LW, y = yv + L(8) },
+				{ s = hills + L(120), lat = -62 * LW, y = yv + L(52) },
+				{ s = hills + L(380), lat = -62 * LW, y = yv + L(52) },
 				-- Back down to road level while still beside the road, then slide in,
 				-- so the merge never puts an edge across the main road
-				{ s = hillsEnd + 10, lat = -36 },
-				{ s = hillsEnd + 60, lat = 0 },
+				{ s = hillsEnd + L(10), lat = -(ROAD + BRANCH) / 2 - 1 },
+				{ s = hillsEnd + L(60), lat = 0 },
 			},
 		})
 	end
@@ -816,16 +882,16 @@ function LevelBuilder.Build(): Instance
 	local cp4 = R.s - 20
 	-- LOW BRIDGE: the long way round the chasm, no jumps needed
 	do
-		local y0 = R:Point(rampAt - 60).Y - ORIGIN.Y
+		local y0 = R:Point(rampAt - L(60)).Y - ORIGIN.Y
 		table.insert(branches, {
 			name = "LowBridge",
 			keys = {
-				{ s = rampAt - 60, lat = 0 },
-				{ s = rampAt + 30, lat = 52, y = y0 - 18 },
-				{ s = island + 45, lat = 70, y = y0 - 30 },
-				{ s = arrival + 10, lat = 56, y = y0 - 18 },
-				{ s = arrival + 60, lat = 36 },
-				{ s = arrival + 100, lat = 0 },
+				{ s = rampAt - L(60), lat = 0 },
+				{ s = rampAt + 30, lat = 52 * LW, y = y0 - 18 },
+				{ s = island + L(45), lat = 70 * LW, y = y0 - 30 },
+				{ s = arrival + L(10), lat = 56 * LW, y = y0 - 18 },
+				{ s = arrival + L(60), lat = (ROAD + BRANCH) / 2 + 1 },
+				{ s = arrival + L(100), lat = 0 },
 			},
 		})
 	end
@@ -844,11 +910,11 @@ function LevelBuilder.Build(): Instance
 		table.insert(branches, {
 			name = "Climb",
 			keys = {
-				{ s = gapStart - 50, lat = 0 },
-				{ s = gapStart + 30, lat = -55, y = y0 + 2 },
-				{ s = gapStart + 100, lat = -80, y = y0 + 12 },
-				{ s = terrace - 10, lat = -50, y = y0 + 22 },
-				{ s = terrace + 70, lat = 0 },
+				{ s = gapStart - L(50), lat = 0 },
+				{ s = gapStart + 30, lat = -55 * LW, y = y0 + 2 },
+				{ s = gapStart + 100, lat = -80 * LW, y = y0 + 12 },
+				{ s = terrace - 10, lat = -50 * LW, y = y0 + 22 },
+				{ s = terrace + L(70), lat = 0 },
 			},
 		})
 	end
@@ -877,7 +943,7 @@ function LevelBuilder.Build(): Instance
 	local forkEnd = R.s
 	R:Straight(80)
 	local cp7 = R.s - 20
-	skipRoad(R, fork + 30, forkEnd - 30)
+	skipRoad(R, fork + L(30), forkEnd - L(30))
 	do
 		local y0 = R:Point(fork).Y - ORIGIN.Y
 		-- Left fork: a speed dip; right fork: flat with imps
@@ -886,9 +952,9 @@ function LevelBuilder.Build(): Instance
 			width = ROAD - 6,
 			keys = {
 				{ s = fork, lat = 0 },
-				{ s = fork + 100, lat = -48, y = y0 - 4 },
-				{ s = fork + 150, lat = -52, y = y0 - 22 },
-				{ s = fork + 200, lat = -48, y = y0 - 4 },
+				{ s = fork + L(100), lat = -48 * LW, y = y0 - L(4) },
+				{ s = fork + L(150), lat = -52 * LW, y = y0 - L(22) },
+				{ s = fork + L(200), lat = -48 * LW, y = y0 - L(4) },
 				{ s = forkEnd, lat = 0, y = y0 },
 			},
 		})
@@ -897,8 +963,8 @@ function LevelBuilder.Build(): Instance
 			width = ROAD - 6,
 			keys = {
 				{ s = fork, lat = 0 },
-				{ s = fork + 100, lat = 48, y = y0 },
-				{ s = fork + 200, lat = 48, y = y0 },
+				{ s = fork + L(100), lat = 48 * LW, y = y0 },
+				{ s = fork + L(200), lat = 48 * LW, y = y0 },
 				{ s = forkEnd, lat = 0, y = y0 },
 			},
 		})
@@ -984,27 +1050,27 @@ function LevelBuilder.Build(): Instance
 	end
 
 	-- Stage 2
-	sign(props, R:Point(dropStart + 30, 0, 9), "HOLD Q DOWNHILL TO ROLL (2x SPEED)")
-	enemySpawn(spawns, R:Point(valley + 90, -6, 4), Vector3.new(0, 0, 7), 1.2)
-	enemySpawn(spawns, R:Point(valley + 120, 6, 4), Vector3.new(0, 0, -7), 1.2)
-	sign(props, R:Point(valley + 60, 10, 13), "ROLL THROUGH IMPS TO SMASH THEM")
-	sign(props, R:Point(valley + 30, -30, 14), "HIGH RIDGE ← (SKIP THE HILLS)")
+	sign(props, R:Point(dropStart + L(30), 0, 9), "HOLD Q DOWNHILL TO ROLL (2x SPEED)")
+	enemySpawn(spawns, R:Point(valley + L(90), -6, 4), Vector3.new(0, 0, 7), 1.2)
+	enemySpawn(spawns, R:Point(valley + L(120), 6, 4), Vector3.new(0, 0, -7), 1.2)
+	sign(props, R:Point(valley + L(60), 10, 13), "ROLL THROUGH IMPS TO SMASH THEM")
+	sign(props, R:Point(valley + L(30), -30 * LW, 14), "HIGH RIDGE ← (SKIP THE HILLS)")
 	do
 		local yv = R:Point(valley).Y
-		local p = R:Point(hills + 250, -62)
-		enemySpawn(spawns, Vector3.new(p.X, yv + 52 + 12, p.Z))
+		local p = R:Point(hills + L(250), -62 * LW)
+		enemySpawn(spawns, Vector3.new(p.X, yv + L(52) + 12, p.Z))
 	end
 
 	-- Stage 3
-	chevrons(props, R, stage[3] + 30, 3, 20)
-	sign(props, R:Point(stage[3] + 50, 0, 13), "STOPPED? HOLD Q TO SPIN-DASH (TAP SPACE TO REV)")
-	sign(props, R:Point(loop1, 9, 60), "THE LOOP: 90+ SPEED OR SPIN-DASH")
+	chevrons(props, R, stage[3] + L(30), 3, 20)
+	sign(props, R:Point(stage[3] + L(50), 0, 13), "STOPPED? HOLD Q TO SPIN-DASH (TAP SPACE TO REV)")
+	sign(props, R:Point(loop1, 9, 80), "THE LOOP: SPIN-DASH OR 100+ SPEED")
 	sign(props, R:Point(helix, 0, 16), "THE SPIRAL: HOLD FORWARD, IT STEERS FOR YOU")
 
 	-- Stage 4
-	sign(props, R:Point(rampAt - 20, 0, 22), "JUMP + TAP SPACE MID-AIR TO AIR DASH")
-	sign(props, R:Point(rampAt - 70, 40, 14), "LOW BRIDGE → (THE LONG WAY)")
-	sign(props, R:Point(island + 60, 6, 16), "STEER RIGHT IN MID-AIR + AIR DASH")
+	sign(props, R:Point(rampAt - L(20), 0, 22), "JUMP + TAP SPACE MID-AIR TO AIR DASH")
+	sign(props, R:Point(rampAt - L(70), 40 * LW, 14), "LOW BRIDGE → (THE LONG WAY)")
+	sign(props, R:Point(island + L(60), 6, 16), "STEER RIGHT IN MID-AIR + AIR DASH")
 
 	-- Stage 5: homing chain over the gap
 	do
@@ -1013,13 +1079,13 @@ function LevelBuilder.Build(): Instance
 			local p = R:Point(gapStart + 175 * frac)
 			enemySpawn(spawns, Vector3.new(p.X, y0 + 8 + i * 5, p.Z))
 		end
-		sign(props, R:Point(gapStart - 30, 0, 22), "LOCK ON -> TAP SPACE TO HOMING ATTACK")
-		sign(props, R:Point(gapStart - 40, -45, 14), "← CLIMB (NO HOMING NEEDED)")
+		sign(props, R:Point(gapStart - L(30), 0, 22), "LOCK ON -> TAP SPACE TO HOMING ATTACK")
+		sign(props, R:Point(gapStart - L(40), -45 * LW, 14), "← CLIMB (NO HOMING NEEDED)")
 	end
 
 	-- Stage 6: stomp imp hovering over the steep part of the slope
 	do
-		local mid = stompSlope + 165
+		local mid = stompSlope + L(165)
 		local p = R:Point(mid)
 		enemySpawn(spawns, p + Y * 30)
 		sign(props, R:Point(stompSlope - 10, 0, 26), "JUMP OUT, THEN PRESS Q MID-AIR TO STOMP!")
@@ -1033,39 +1099,39 @@ function LevelBuilder.Build(): Instance
 	end
 
 	-- Stage 7: boost gauntlet, wall-run pipe, fork around a lava pillar
-	chevrons(props, R, gauntlet - 60, 5, 28)
-	sign(props, R:Point(gauntlet - 20, 0, 15), "HOLD SHIFT TO BOOST THROUGH IMPS (NEEDS HEAT)")
+	chevrons(props, R, gauntlet - L(60), 5, 28)
+	sign(props, R:Point(gauntlet - L(20), 0, 15), "HOLD SHIFT TO BOOST THROUGH IMPS (NEEDS HEAT)")
 	for i, lat in { 0, 8, -8, 0 } do
-		local _, _, right = R:At(gauntlet + 70 + i * 60)
-		enemySpawn(spawns, R:Point(gauntlet + 70 + i * 60, lat, 4), right * (if i % 2 == 0 then 8 else -8), 1.1)
+		local _, _, right = R:At(gauntlet + L(70 + i * 60))
+		enemySpawn(spawns, R:Point(gauntlet + L(70 + i * 60), lat, 4), right * (if i % 2 == 0 then 8 else -8), 1.1)
 	end
 	wallRunPipe(level, R, gauntlet, gauntletEnd)
-	sign(props, R:Point(gauntlet + 40, -26, 22), "OR STEER LEFT TO WALL RUN!")
-	enemySpawn(spawns, R:Point(gauntlet + 140, -ROAD / 2 - 16, 26))
-	enemySpawn(spawns, R:Point(gauntlet + 260, -ROAD / 2 - 16, 26))
+	sign(props, R:Point(gauntlet + L(40), -26 * LW, 22), "OR STEER LEFT TO WALL RUN!")
+	enemySpawn(spawns, R:Point(gauntlet + L(140), -ROAD / 2 - 16, 30))
+	enemySpawn(spawns, R:Point(gauntlet + L(260), -ROAD / 2 - 16, 30))
 	do
 		local base = R:Point((fork + forkEnd) / 2)
 		newPart(props, {
 			Name = "ForkPillar",
-			Size = Vector3.new(34, 260, 34),
-			Position = base - Y * 120,
+			Size = Vector3.new(34 * LW, 400, 34 * LW),
+			Position = base - Y * 190,
 			Color = COLOR.pillar,
 		})
 		newPart(props, deco({
 			Name = "ForkPillarGlow",
-			Size = Vector3.new(35, 3, 35),
+			Size = Vector3.new(34 * LW + 1, 3, 34 * LW + 1),
 			Position = base - Y * 30,
 			Material = Enum.Material.Neon,
 			Color = COLOR.trim,
 		}))
 		sign(props, R:Point(fork - 10, 0, 18), "← SPEED DIP   |   IMP ROW →")
-		enemySpawn(spawns, R:Point(fork + 130, 48, 4))
-		enemySpawn(spawns, R:Point(fork + 170, 48, 4))
+		enemySpawn(spawns, R:Point(fork + L(130), 48 * LW, 4))
+		enemySpawn(spawns, R:Point(fork + L(170), 48 * LW, 4))
 	end
 
 	-- Stage 8
-	chevrons(props, R, bigLoop - 90, 3, 20)
-	sign(props, R:Point(bigLoop, 10, 72), "BOOST THROUGH THE GIANT LOOP!")
+	chevrons(props, R, bigLoop - L(90), 3, 20)
+	sign(props, R:Point(bigLoop, 10, 100), "BOOST THROUGH THE GIANT LOOP!")
 	sign(props, R:Point(cork - 20, 0, 18), "CORKSCREW! KEEP YOUR SPEED UP")
 	sign(props, R:Point(skyRamp - 30, 0, 18), "SKY JUMP! JUMP AT THE TOP OF THE RAMP")
 	do
@@ -1075,7 +1141,7 @@ function LevelBuilder.Build(): Instance
 			enemySpawn(spawns, Vector3.new(p.X, y + 30, p.Z))
 		end
 	end
-	buildGoalGate(level, R, plaza + 70, 36)
+	buildGoalGate(level, R, plaza + L(70), 36 * LW)
 	do
 		local cf = R:Frame(finish - 2)
 		newPart(props, {
@@ -1132,7 +1198,7 @@ function LevelBuilder.Build(): Instance
 			table.insert(routePts, p.pos)
 		end
 	end
-	local floorY = minC.Y - 70
+	local floorY = minC.Y - 160 -- a deep drop to the lava below
 	local pad = 260
 	local tile = 2000
 	for x = minC.X - pad, maxC.X + pad, tile do
@@ -1149,6 +1215,7 @@ function LevelBuilder.Build(): Instance
 		end
 	end
 	buildScenery(level, minC - Vector3.new(pad, 0, pad), maxC + Vector3.new(pad, 0, pad), routePts, floorY)
+	buildCliffs(level, R, routePts, floorY)
 	setupLighting()
 
 	-- Turn off any other spawns (like the Baseplate template's) so you start here.

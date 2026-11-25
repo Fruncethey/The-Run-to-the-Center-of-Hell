@@ -58,7 +58,7 @@ The heat meter fills while you go faster than 50 studs/s. Boost needs the bar pa
 
 ## Tutorial course ("Circle 0: The Descent Gate")
 
-The tutorial is one long, twisting speed course (about 8,000 studs) over a lava sea. It runs through 8 stages with 7 checkpoints, contextual HUD stage prompts, a run timer and a finish gate. Along the way you get banked curves, rolling hills, long drops, two loops, a helix, a corkscrew and four optional branch routes that split off and merge back:
+The tutorial is one huge, twisting speed course (about 12,900 studs, on a 60-stud-wide road) that runs through a canyon of giant walls high above a lava sea. It runs through 8 stages with 7 checkpoints, contextual HUD stage prompts, a run timer and a finish gate. Along the way you get banked curves, rolling hills, long drops, two loops, a helix, a corkscrew and four optional branch routes that split off and merge back:
 
 1. **Stage 1 · Run & Jump:** build speed on the runway, tap `Space` over the hurdles and the gap, then take the sweeping right-hander.
 2. **Stage 2 · Roll & Momentum:** hold `Q` down the long drop, roll over four hills, or take the **High Ridge** branch above them. Banked S-curves follow.
@@ -69,7 +69,7 @@ The tutorial is one long, twisting speed course (about 8,000 studs) over a lava 
 7. **Stage 7 · Boost & Wall Run:** Boost through the gauntlet or ride the wall-run pipe, then pick a side at the **Fork** around a lava pillar.
 8. **Finale:** Boost through the giant loop, keep your speed through the corkscrew, jump off the sky ramp and smash through **The Descent Gate** (press `R` after finishing to run it again).
 
-Edge curbs line the curves and funnel you into the loops and the corkscrew. Missing a jump respawns you at your last checkpoint as soon as you've fallen 100 studs.
+The scale is set by `K` (1.6) at the top of `LevelBuilder.luau`: it stretches road lengths, slopes and curves, while jump gaps and launch ramps keep their size so every jump needs the same speed and timing. Edge curbs line the curves and funnel you into the loops and the corkscrew. Missing a jump respawns you at your last checkpoint as soon as you've fallen 100 studs.
 
 ## How it works (short version)
 
