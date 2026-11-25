@@ -5,7 +5,6 @@
 --   * glowing orange circle eyes that change expression (AshFace)
 --   * a glowing orange crack across the chest
 --   * a red scarf knot around the neck (AshFx streams the tail behind him)
---   * glowing orange sneaker bands on the bottoms of the legs, with heel flames
 --
 -- The rig uses the standard R6 part and joint names, so the run cycle (which
 -- drives R6 joints too), spin-ball and afterimages work on it.
@@ -13,7 +12,6 @@
 -- Decoration parts are named so the client can find them:
 --   AshCrack      glowing parts (brightened with speed by AshFx)
 --   AshScarfKnot  the scarf around the neck (the tail hangs off its back)
---   AshFlame      attachments on the sneakers holding the flame emitters
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -131,29 +129,6 @@ local function addLooks(parts)
 
 	-- Red scarf knot around the neck
 	deco(torso, "AshScarfKnot", Vector3.new(1.3, 0.3, 1.1), CFrame.new(0, 0.92, 0), SCARF)
-
-	-- Sneakers: a glowing orange band on the bottom of each leg, with heel flames
-	for _, name in { "Left Leg", "Right Leg" } do
-		local leg = parts[name]
-		deco(leg, "AshCrack", Vector3.new(1.04, 0.35, 1.04), CFrame.new(0, -0.83, 0), EMBER, true)
-		local att = Instance.new("Attachment")
-		att.Name = "AshFlame"
-		att.Position = Vector3.new(0, -0.85, 0.4)
-		att.Parent = leg
-		local fire = Instance.new("ParticleEmitter")
-		fire.Name = "Flames"
-		fire.Texture = "rbxasset://textures/particles/fire_main.dds"
-		fire.Color = ColorSequence.new(Color3.fromRGB(255, 200, 80), Color3.fromRGB(220, 40, 10))
-		fire.LightEmission = 1
-		fire.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.55), NumberSequenceKeypoint.new(1, 0) })
-		fire.Transparency = NumberSequence.new(0.2, 1)
-		fire.Lifetime = NumberRange.new(0.2, 0.35)
-		fire.Speed = NumberRange.new(1.5, 3)
-		fire.SpreadAngle = Vector2.new(25, 25)
-		fire.Acceleration = Vector3.new(0, 8, 0)
-		fire.Rate = 12
-		fire.Parent = att
-	end
 end
 
 -- Returns a fresh Ash model, ready to be used as StarterPlayer.StarterCharacter.

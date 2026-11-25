@@ -1,9 +1,8 @@
 -- Ash's local effects, driven by CharacterFx every frame:
 --   * his cracks smoulder when slow and blaze brighter the faster he goes
 --   * the tattered red scarf tail streams and flutters behind him (a little rope sim)
---   * his sneaker flames grow with speed
 --   * his eyes change expression (AshFace)
--- The scarf knot, cracks and flame emitters themselves are built by AshBuilder on the server.
+-- The scarf knot and cracks themselves are built by AshBuilder on the server.
 
 local Workspace = game:GetService("Workspace")
 
@@ -43,12 +42,9 @@ function AshFx.new(character: Model, ctrl)
 	self.glow = 0
 
 	self.cracks = {}
-	self.flames = {}
 	for _, d in character:GetDescendants() do
 		if d:IsA("BasePart") and d.Name == "AshCrack" then
 			table.insert(self.cracks, d)
-		elseif d:IsA("ParticleEmitter") and d.Parent and d.Parent.Name == "AshFlame" then
-			table.insert(self.flames, d)
 		end
 	end
 	self.knot = character:FindFirstChild("AshScarfKnot", true)
@@ -209,16 +205,6 @@ function AshFx:Update(dt: number, speed: number, hidden: boolean)
 	local color = CRACK_DIM:Lerp(CRACK_HOT, heat)
 	for _, crack in self.cracks do
 		crack.Color = color
-	end
-
-	-- Sneaker flames grow with speed
-	for _, fire in self.flames do
-		fire.Enabled = not hidden
-		fire.Rate = 10 + 70 * self.glow
-		fire.Size = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 0.45 + 0.5 * self.glow),
-			NumberSequenceKeypoint.new(1, 0),
-		})
 	end
 
 	self:UpdateScarf(dt, speed, hidden)

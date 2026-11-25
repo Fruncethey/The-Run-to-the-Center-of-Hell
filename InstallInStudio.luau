@@ -204,9 +204,8 @@ return AshFace
 script(f, 'ModuleScript', 'AshFx', [=====[-- Ash's local effects, driven by CharacterFx every frame:
 --   * his cracks smoulder when slow and blaze brighter the faster he goes
 --   * the tattered red scarf tail streams and flutters behind him (a little rope sim)
---   * his sneaker flames grow with speed
 --   * his eyes change expression (AshFace)
--- The scarf knot, cracks and flame emitters themselves are built by AshBuilder on the server.
+-- The scarf knot and cracks themselves are built by AshBuilder on the server.
 
 local Workspace = game:GetService("Workspace")
 
@@ -246,12 +245,9 @@ function AshFx.new(character: Model, ctrl)
 	self.glow = 0
 
 	self.cracks = {}
-	self.flames = {}
 	for _, d in character:GetDescendants() do
 		if d:IsA("BasePart") and d.Name == "AshCrack" then
 			table.insert(self.cracks, d)
-		elseif d:IsA("ParticleEmitter") and d.Parent and d.Parent.Name == "AshFlame" then
-			table.insert(self.flames, d)
 		end
 	end
 	self.knot = character:FindFirstChild("AshScarfKnot", true)
@@ -412,16 +408,6 @@ function AshFx:Update(dt: number, speed: number, hidden: boolean)
 	local color = CRACK_DIM:Lerp(CRACK_HOT, heat)
 	for _, crack in self.cracks do
 		crack.Color = color
-	end
-
-	-- Sneaker flames grow with speed
-	for _, fire in self.flames do
-		fire.Enabled = not hidden
-		fire.Rate = 10 + 70 * self.glow
-		fire.Size = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 0.45 + 0.5 * self.glow),
-			NumberSequenceKeypoint.new(1, 0),
-		})
 	end
 
 	self:UpdateScarf(dt, speed, hidden)
@@ -1021,7 +1007,7 @@ local Config = {
 
 	-- Ash (the main character)
 	AshBodyColor = Color3.fromRGB(30, 200, 255), -- electric cyan: the opposite of lava orange, so he stands out
-	AshGlowFullSpeed = 150, -- his cracks and sneaker flames are at full blaze by this speed
+	AshGlowFullSpeed = 150, -- his chest crack is at full blaze by this speed
 	AshScarfSegments = 7, -- links in the scarf tail
 	AshScarfSegmentLength = 0.5,
 	AshScarfDrag = 3, -- air drag on the scarf; higher streams it straighter behind
@@ -2512,7 +2498,6 @@ script(f, 'ModuleScript', 'AshBuilder', [=====[-- Builds Ash, the playable main 
 --   * glowing orange circle eyes that change expression (AshFace)
 --   * a glowing orange crack across the chest
 --   * a red scarf knot around the neck (AshFx streams the tail behind him)
---   * glowing orange sneaker bands on the bottoms of the legs, with heel flames
 --
 -- The rig uses the standard R6 part and joint names, so the run cycle (which
 -- drives R6 joints too), spin-ball and afterimages work on it.
@@ -2520,7 +2505,6 @@ script(f, 'ModuleScript', 'AshBuilder', [=====[-- Builds Ash, the playable main 
 -- Decoration parts are named so the client can find them:
 --   AshCrack      glowing parts (brightened with speed by AshFx)
 --   AshScarfKnot  the scarf around the neck (the tail hangs off its back)
---   AshFlame      attachments on the sneakers holding the flame emitters
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -2638,29 +2622,6 @@ local function addLooks(parts)
 
 	-- Red scarf knot around the neck
 	deco(torso, "AshScarfKnot", Vector3.new(1.3, 0.3, 1.1), CFrame.new(0, 0.92, 0), SCARF)
-
-	-- Sneakers: a glowing orange band on the bottom of each leg, with heel flames
-	for _, name in { "Left Leg", "Right Leg" } do
-		local leg = parts[name]
-		deco(leg, "AshCrack", Vector3.new(1.04, 0.35, 1.04), CFrame.new(0, -0.83, 0), EMBER, true)
-		local att = Instance.new("Attachment")
-		att.Name = "AshFlame"
-		att.Position = Vector3.new(0, -0.85, 0.4)
-		att.Parent = leg
-		local fire = Instance.new("ParticleEmitter")
-		fire.Name = "Flames"
-		fire.Texture = "rbxasset://textures/particles/fire_main.dds"
-		fire.Color = ColorSequence.new(Color3.fromRGB(255, 200, 80), Color3.fromRGB(220, 40, 10))
-		fire.LightEmission = 1
-		fire.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.55), NumberSequenceKeypoint.new(1, 0) })
-		fire.Transparency = NumberSequence.new(0.2, 1)
-		fire.Lifetime = NumberRange.new(0.2, 0.35)
-		fire.Speed = NumberRange.new(1.5, 3)
-		fire.SpreadAngle = Vector2.new(25, 25)
-		fire.Acceleration = Vector3.new(0, 8, 0)
-		fire.Rate = 12
-		fire.Parent = att
-	end
 end
 
 -- Returns a fresh Ash model, ready to be used as StarterPlayer.StarterCharacter.
