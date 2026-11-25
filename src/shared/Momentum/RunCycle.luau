@@ -259,7 +259,8 @@ end
 function RunCycle:ApplyTopSpeed(pose, k: number)
 	local C = Config
 	self:ApplyLean(pose, C.RunCycleTopLean * k)
-	local back = C.RunCycleTopArmBack + 0.06 * math.sin(self.phase * 2)
+	-- The target is measured against the road, not the torso, so a deeper lean never lifts the arms
+	local back = C.RunCycleTopArmBack - self:TorsoLean(pose) + 0.06 * math.sin(self.phase * 2)
 	local out = C.RunCycleTopArmOut
 	local armL = rot(0, 0, -out) * rot(-back, 0, 0)
 	local armR = rot(0, 0, out) * rot(-back, 0, 0)
@@ -276,6 +277,44 @@ function RunCycle:ApplyTopSpeed(pose, k: number)
 		pose.RightShoulder = pose.RightShoulder:Lerp(armR, k)
 		pose.LeftElbow = pose.LeftElbow:Lerp(rot(0.15, 0, 0), k)
 		pose.RightElbow = pose.RightElbow:Lerp(rot(0.15, 0, 0), k)
+	end
+end
+
+-- How far the torso is tipped forward from upright (radians), read from the root pose
+function RunCycle:TorsoLean(pose): number
+	local root = self.motors.RootJoint
+	if not (self.r6 and root and pose.RootJoint) then
+		return 0
+	end
+	local up = (root.C0 * pose.RootJoint * root.C1:Inverse()).UpVector
+	return math.atan2(-up.Z, up.Y)
+end
+
+-- The arms hang from the torso, so a deep forward lean swings them up behind him. Measure
+-- where each arm really points (against the body's heading, 0 = straight down, pi/2 = level
+-- with the road behind him) and ease anything past RunCycleArmSoftBack down toward
+-- RunCycleArmMaxBack, so the arms trail out behind him instead of sticking up.
+function RunCycle:LimitArmsBack(pose)
+	local C = Config
+	local root = self.motors.RootJoint
+	if not (self.r6 and root and pose.RootJoint) then
+		return
+	end
+	local torso = root.C0 * pose.RootJoint * root.C1:Inverse()
+	local start, limit = C.RunCycleArmSoftBack, C.RunCycleArmMaxBack
+	for _, name in { "Left Shoulder", "Right Shoulder" } do
+		local joint = self.motors[name]
+		if joint and pose[name] then
+			local down = -(torso * joint.C0 * pose[name] * joint.C1:Inverse()).UpVector
+			local back = math.atan2(down.Z, -down.Y)
+			if back > start then
+				local eased = start + (limit - start) * math.tanh((back - start) / (limit - start))
+				local f = self.frames[name]
+				-- Swing it forward about the body's side-to-side axis (the torso may be twisted)
+				local axis = torso:VectorToObjectSpace(Vector3.xAxis)
+				pose[name] = f:Inverse() * CFrame.fromAxisAngle(axis, back - eased) * f * pose[name]
+			end
+		end
 	end
 end
 
@@ -329,6 +368,7 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 	if top > 0.001 then
 		self:ApplyTopSpeed(pose, top)
 	end
+	self:LimitArmsBack(pose)
 	for name, joint in self.motors do
 		joint.Transform = CFrame.identity:Lerp(pose[name], self.weight)
 	end

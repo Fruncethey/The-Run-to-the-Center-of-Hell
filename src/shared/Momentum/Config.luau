@@ -121,8 +121,12 @@ local Config = {
 	RunCycleTopStart = 100, -- starts blending in here (running tops out at 90)
 	RunCycleTopFull = 150, -- fully in by this speed
 	RunCycleTopLean = 0.5, -- extra forward tilt of the torso, radians
-	RunCycleTopArmBack = 1.35, -- how far back the arms sweep, radians
+	RunCycleTopArmBack = 1.3, -- how far back the arms sweep, radians from hanging straight down (pi/2 = level with the road)
 	RunCycleTopArmOut = 0.2, -- arms angle slightly out from the body, radians
+	-- At any lean, an arm swinging back past ArmSoftBack (radians from straight down) is eased
+	-- toward ArmMaxBack, so the arms trail out behind him instead of sticking up
+	RunCycleArmSoftBack = 1.0,
+	RunCycleArmMaxBack = 1.4,
 	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
 	RunCycleBankMax = 0.48, -- radians, the most it ever banks
 	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders
