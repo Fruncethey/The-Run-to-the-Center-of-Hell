@@ -140,8 +140,11 @@ Step rate climbs from 1.4 to 2.45 cycles per second by running top speed (90).
 
 Above top speed (boosts, slopes) the same gait gets small extras so the legs keep up, fully in by
 `RunCycleOverdriveSpeed` (200): about 1 more step cycle per second (`RunCycleOverdriveCadence`), a 12% longer
-stride and arm swing (`RunCycleOverdriveStride`) and a little more lean (`RunCycleOverdriveLean`).
-Below top speed nothing changes.
+leg stride (`RunCycleOverdriveStride`) and a much deeper forward tilt (`RunCycleOverdriveLean`). The arm motion
+never changes with it.
+
+The torso tilts forward with speed: about 27 degrees at a full run (`RunCycleRunLean`), 38 degrees at 155 and
+about 57 degrees by 200.
 Tune it with the `RunCycle*` values in `Config.luau`.
 
 Running and sprinting are cartoon-exaggerated by `RunCycleExaggeration` (1.05): bigger strides with high knees

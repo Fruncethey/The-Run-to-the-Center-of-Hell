@@ -110,8 +110,9 @@ local Config = {
 	-- so the legs keep up with boosts and slopes. Below TopSpeed nothing changes.
 	RunCycleOverdriveSpeed = 200, -- the extras are fully in by this speed
 	RunCycleOverdriveCadence = 1.0, -- extra step cycles per second (2.45 -> 3.45)
-	RunCycleOverdriveStride = 0.12, -- stride and arm swing grow by up to 12%
-	RunCycleOverdriveLean = 0.08, -- extra forward lean, radians
+	RunCycleOverdriveStride = 0.12, -- leg stride grows by up to 12%
+	RunCycleOverdriveLean = 0.4, -- extra forward tilt of the torso by RunCycleOverdriveSpeed, radians
+	RunCycleRunLean = 0.45, -- forward tilt of the torso at full running speed, radians
 	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
 	RunCycleBankMax = 0.48, -- radians, the most it ever banks
 	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders

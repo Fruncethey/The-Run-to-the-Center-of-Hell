@@ -989,8 +989,9 @@ local Config = {
 	-- so the legs keep up with boosts and slopes. Below TopSpeed nothing changes.
 	RunCycleOverdriveSpeed = 200, -- the extras are fully in by this speed
 	RunCycleOverdriveCadence = 1.0, -- extra step cycles per second (2.45 -> 3.45)
-	RunCycleOverdriveStride = 0.12, -- stride and arm swing grow by up to 12%
-	RunCycleOverdriveLean = 0.08, -- extra forward lean, radians
+	RunCycleOverdriveStride = 0.12, -- leg stride grows by up to 12%
+	RunCycleOverdriveLean = 0.4, -- extra forward tilt of the torso by RunCycleOverdriveSpeed, radians
+	RunCycleRunLean = 0.45, -- forward tilt of the torso at full running speed, radians
 	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
 	RunCycleBankMax = 0.48, -- radians, the most it ever banks
 	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders
@@ -2367,7 +2368,7 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	local run = smooth((speed - C.RunCycleWalkSpeed) / (C.RunCycleRunSpeed - C.RunCycleWalkSpeed))
 	local sprint = smooth((speed - C.RunCycleSprintSpeed) / C.RunCycleSprintBlend)
 	-- Overdrive: past running top speed (boosts, slopes) the same gait stretches a little
-	-- further so it keeps up: longer stride, more lean, bigger arm pumps
+	-- further so it keeps up: longer stride, faster steps and a deeper forward tilt (arms unchanged)
 	local od = self:Overdrive(speed)
 	local stretch = 1 + C.RunCycleOverdriveStride * od
 
@@ -2394,7 +2395,7 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	-- Arms: one thrust forward while the other is flung back, snapping between the two in
 	-- time with the stride (they hold each pose and switch quickly), and floating a little
 	-- away from the shoulders, cartoon style
-	local armAmp = lerp(0.35, 1.1, run) * x * move * stretch
+	local armAmp = lerp(0.35, 1.1, run) * x * move
 	local snap = math.sign(s) * math.abs(s) ^ lerp(1, C.RunCycleArmSnap, run)
 	local shoulderLX = -snap * armAmp
 	local shoulderRX = snap * armAmp
@@ -2405,7 +2406,7 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 
 	-- Torso: lean into speed, twist against the hips, bounce on each footfall,
 	-- and rock the hips side to side
-	local lean = -(lerp(0.04, 0.36, run) * move + 0.10 * sprint + C.RunCycleOverdriveLean * od) * x
+	local lean = -(lerp(0.04, C.RunCycleRunLean, run) * move + 0.10 * sprint + C.RunCycleOverdriveLean * od) * x
 	local twist = 0.18 * s * run * (1 - 0.5 * sprint) * x
 	local bounce = (math.abs(c) - 0.5) * lerp(0.08, 0.35, run) * x * x * move
 	local sway = 0.08 * s * run * (x - 1) * 2
