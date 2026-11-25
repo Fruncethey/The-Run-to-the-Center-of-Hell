@@ -775,7 +775,10 @@ function LevelBuilder.Build(): Instance
 				{ s = valley + 120, lat = -46, y = yv + 8 },
 				{ s = hills + 120, lat = -62, y = yv + 52 },
 				{ s = hills + 380, lat = -62, y = yv + 52 },
-				{ s = hillsEnd + 50, lat = 0 },
+				-- Back down to road level while still beside the road, then slide in,
+				-- so the merge never puts an edge across the main road
+				{ s = hillsEnd + 10, lat = -36 },
+				{ s = hillsEnd + 60, lat = 0 },
 			},
 		})
 	end
@@ -821,6 +824,7 @@ function LevelBuilder.Build(): Instance
 				{ s = rampAt + 30, lat = 52, y = y0 - 18 },
 				{ s = island + 45, lat = 70, y = y0 - 30 },
 				{ s = arrival + 10, lat = 56, y = y0 - 18 },
+				{ s = arrival + 60, lat = 36 },
 				{ s = arrival + 100, lat = 0 },
 			},
 		})

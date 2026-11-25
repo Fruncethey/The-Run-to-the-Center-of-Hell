@@ -77,8 +77,9 @@ Edge curbs line the curves and funnel you into the loops and the corkscrew. Miss
   simulates the character and writes the root CFrame and velocity. The client owns its character, so it replicates.
 - Character parts are in a collision group that doesn't collide with the world; the controller does its own
   collision with a sphere cast (walls, ramps) and a ray cast down along the current surface normal (ground snapping).
-- When grounded, "up" is the surface normal. Gravity is projected along the surface (`SlopeFactor`), which gives
-  momentum on slopes and lets you lose speed going up loops and walls. Below `MinWallSpeed` on a steep surface you peel off.
+- When grounded, "up" is the surface normal. Gravity is projected along the surface, which gives momentum on slopes
+  and lets you lose speed going up loops and walls. Downhill pulls harder (`SlopeFactorDown` 1.1) than uphill holds
+  you back (`SlopeFactor` 0.55), so slopes always pay out speed while loops need the same run-up as before. Below `MinWallSpeed` on a steep surface you peel off.
 - Moving onto a new surface keeps your speed and redirects it along the surface, which is what makes loops and
   quarter pipes flow.
 - Parts with the attribute `MomentumGuide = true` lock your direction to the part's LookVector. The loop uses this so
@@ -93,10 +94,10 @@ Hold the roll button (Q) while moving faster than 20 to curl into a roll. It tra
 | | Running | Rolling |
 |---|---|---|
 | Holding forward | Speeds you up to `TopSpeed` (90) | Does nothing: slopes are your engine |
-| Above `TopSpeed` | Sheds speed back to 90 (`RunOverspeedDrag` 25/s) | Keeps it; friction is only 4/s |
-| Downhill | Normal slope gain | Twice the gain (`RollSlopeDown`) |
+| Above `TopSpeed` | Keeps it while going downhill; on flat ground sheds it back to 90 (`RunOverspeedDrag` 12/s) | Keeps it; friction is only 4/s |
+| Downhill | Strong slope gain, about 160 speed at the bottom of the stage 2 drop | 1.6x that (`RollSlopeDown`), over 200 |
 | Uphill | Normal slope loss | Half the loss (`RollSlopeUp`) |
-| Steering | Full turn rate | About a third (`RollTurnFactor`) |
+| Steering | Full turn rate (above top speed it scales up so the turning circle stays the same) | About a third (`RollTurnFactor`) |
 | Braking (hold back) | Strong (160/s) | Weak (30/s) |
 
 You uncurl below 8 speed, or by jumping. Rolling also destroys enemies you hit.

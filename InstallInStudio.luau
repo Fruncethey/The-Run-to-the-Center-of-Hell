@@ -889,7 +889,9 @@ local Config = {
 	Friction = 35, -- ground slowdown with no input
 	TopSpeed = 90, -- the fastest you can get by running on flat ground
 	MaxSpeed = 320, -- hard cap (slopes, spin-dash and boost can exceed TopSpeed)
-	SlopeFactor = 0.55, -- share of gravity that pushes you along slopes
+	SlopeFactor = 0.55, -- share of gravity that slows you going uphill
+	SlopeFactorDown = 1.1, -- share of gravity that speeds you up going downhill
+	DescentMinPull = 6, -- on a slope steeper than about 3 degrees, running keeps the speed it gains
 	TurnRateSlow = 9, -- radians/sec when standing still
 	TurnRateFast = 1.4, -- radians/sec at top speed and above
 
@@ -930,9 +932,9 @@ local Config = {
 	RollFriction = 4, -- running sheds speed above TopSpeed much faster (RunOverspeedDrag)
 	RollTurnFactor = 0.35, -- share of running's turn rate you keep while rolling
 	RollBrake = 30, -- holding back while rolling (running brakes at Decel)
-	RollSlopeDown = 2.0, -- rolling downhill gains twice the speed running does
+	RollSlopeDown = 1.6, -- rolling downhill gains 1.6x the speed running does
 	RollSlopeUp = 0.5, -- and loses half as much going uphill
-	RunOverspeedDrag = 25, -- running above TopSpeed (not boosting) bleeds back down to it
+	RunOverspeedDrag = 12, -- on flat ground, running above TopSpeed (not boosting) bleeds back down to it
 	SpinDashMaxStartSpeed = 20,
 	SpinChargeTime = 0.9, -- seconds of holding for a full charge
 	SpinRevBonus = 0.25, -- each jump tap while charging adds this much charge
@@ -1064,7 +1066,10 @@ end
 -- How fast running can turn: sharp when slow, wide arcs at top speed.
 local function runTurnRate(speed: number): number
 	local t = math.clamp(speed / Config.TopSpeed, 0, 1)
-	return Config.TurnRateSlow + (Config.TurnRateFast - Config.TurnRateSlow) * t
+	local rate = Config.TurnRateSlow + (Config.TurnRateFast - Config.TurnRateSlow) * t
+	-- Past top speed (slopes, boosts) keep the turning circle the same size, so
+	-- you can still take the curves at the bottom of a big drop
+	return rate * math.max(1, speed / Config.TopSpeed)
 end
 
 local function towards(a: Vector3, b: Vector3, t: number): Vector3
@@ -1407,9 +1412,12 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 
 	-- Gravity along the slope: this is what makes momentum matter
 	local gTan = projectOnPlane(Vector3.new(0, -Config.Gravity, 0), n)
-	local slope = Config.SlopeFactor
+	-- Going downhill pulls harder than going uphill holds you back, so slopes
+	-- always pay out speed and loops still need the same run-up as before
+	local downhill = gTan:Dot(vel) > 0
+	local slope = if downhill then Config.SlopeFactorDown else Config.SlopeFactor
 	if self.rolling then
-		slope *= if gTan:Dot(vel) > 0 then Config.RollSlopeDown else Config.RollSlopeUp
+		slope *= if downhill then Config.RollSlopeDown else Config.RollSlopeUp
 	end
 	if not self.charging then
 		vel += gTan * slope * dt
@@ -1454,8 +1462,10 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 		speed = math.max(0, speed - Config.Friction * dt)
 	end
 
-	-- Running can't hold onto speed past TopSpeed the way a roll can
-	if not self.rolling and not self.charging and not self.boosting and speed > Config.TopSpeed then
+	-- Running can't hold onto speed past TopSpeed the way a roll can, except while
+	-- a real downhill is still feeding it
+	local onDescent = downhill and gTan.Magnitude > Config.DescentMinPull
+	if not self.rolling and not self.charging and not self.boosting and not onDescent and speed > Config.TopSpeed then
 		speed = math.max(Config.TopSpeed, speed - Config.RunOverspeedDrag * dt)
 	end
 
@@ -4198,7 +4208,10 @@ function LevelBuilder.Build(): Instance
 				{ s = valley + 120, lat = -46, y = yv + 8 },
 				{ s = hills + 120, lat = -62, y = yv + 52 },
 				{ s = hills + 380, lat = -62, y = yv + 52 },
-				{ s = hillsEnd + 50, lat = 0 },
+				-- Back down to road level while still beside the road, then slide in,
+				-- so the merge never puts an edge across the main road
+				{ s = hillsEnd + 10, lat = -36 },
+				{ s = hillsEnd + 60, lat = 0 },
 			},
 		})
 	end
@@ -4244,6 +4257,7 @@ function LevelBuilder.Build(): Instance
 				{ s = rampAt + 30, lat = 52, y = y0 - 18 },
 				{ s = island + 45, lat = 70, y = y0 - 30 },
 				{ s = arrival + 10, lat = 56, y = y0 - 18 },
+				{ s = arrival + 60, lat = 36 },
 				{ s = arrival + 100, lat = 0 },
 			},
 		})

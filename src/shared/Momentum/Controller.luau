@@ -39,7 +39,10 @@ end
 -- How fast running can turn: sharp when slow, wide arcs at top speed.
 local function runTurnRate(speed: number): number
 	local t = math.clamp(speed / Config.TopSpeed, 0, 1)
-	return Config.TurnRateSlow + (Config.TurnRateFast - Config.TurnRateSlow) * t
+	local rate = Config.TurnRateSlow + (Config.TurnRateFast - Config.TurnRateSlow) * t
+	-- Past top speed (slopes, boosts) keep the turning circle the same size, so
+	-- you can still take the curves at the bottom of a big drop
+	return rate * math.max(1, speed / Config.TopSpeed)
 end
 
 local function towards(a: Vector3, b: Vector3, t: number): Vector3
@@ -382,9 +385,12 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 
 	-- Gravity along the slope: this is what makes momentum matter
 	local gTan = projectOnPlane(Vector3.new(0, -Config.Gravity, 0), n)
-	local slope = Config.SlopeFactor
+	-- Going downhill pulls harder than going uphill holds you back, so slopes
+	-- always pay out speed and loops still need the same run-up as before
+	local downhill = gTan:Dot(vel) > 0
+	local slope = if downhill then Config.SlopeFactorDown else Config.SlopeFactor
 	if self.rolling then
-		slope *= if gTan:Dot(vel) > 0 then Config.RollSlopeDown else Config.RollSlopeUp
+		slope *= if downhill then Config.RollSlopeDown else Config.RollSlopeUp
 	end
 	if not self.charging then
 		vel += gTan * slope * dt
@@ -429,8 +435,10 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 		speed = math.max(0, speed - Config.Friction * dt)
 	end
 
-	-- Running can't hold onto speed past TopSpeed the way a roll can
-	if not self.rolling and not self.charging and not self.boosting and speed > Config.TopSpeed then
+	-- Running can't hold onto speed past TopSpeed the way a roll can, except while
+	-- a real downhill is still feeding it
+	local onDescent = downhill and gTan.Magnitude > Config.DescentMinPull
+	if not self.rolling and not self.charging and not self.boosting and not onDescent and speed > Config.TopSpeed then
 		speed = math.max(Config.TopSpeed, speed - Config.RunOverspeedDrag * dt)
 	end
 
