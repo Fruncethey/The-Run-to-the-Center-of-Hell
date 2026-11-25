@@ -9,8 +9,400 @@ local function script(folder, class, name, source)
   local s = Instance.new(class); s.Name = name; s.Source = source; s.Parent = folder; return s
 end
 do local f = put(game:GetService('ReplicatedStorage'), 'Momentum')
-script(f, 'ModuleScript', 'CharacterFx', [=====[-- Visuals for the local character: a speed-driven procedural run cycle (R15;
--- R6 falls back to the default run/idle/fall animations), a molten spin-ball while jumping, rolling or charging, and a fire trail
+script(f, 'ModuleScript', 'AshFace', [=====[-- Ash's face: two glowing orange circle eyes and nothing else (no mouth, pupils or
+-- brows), drawn with a SurfaceGui on a thin invisible plate in front of the R6 head.
+--
+-- The server builds it (AshFace.Build) so everyone sees his resting eyes. On your own
+-- screen AshFx drives it every frame (AshFace.new + Update), and the eyes alone show
+-- his expression:
+--   idle        round circles, blinking every few seconds
+--   determined  squashed and tilted inward (running, jumping)
+--   happy       ^ ^ arcs (above top speed, boosting, homing)
+--   falling     bigger circles
+--   wince       > < squeezed shut (just got hit)
+
+local Config = require(script.Parent.Config)
+
+local AshFace = {}
+AshFace.__index = AshFace
+
+local W, H = 120, 90 -- canvas pixels (plate is 1.2 x 0.9 studs at 100 px per stud)
+local EYE = 24 -- circle diameter in pixels
+local EYE_Y = 42
+local EYE_X = { Left = 40, Right = 80 }
+local ORANGE = Color3.fromRGB(255, 140, 30)
+
+local function frame(parent: Instance, name: string, size: UDim2, pos: UDim2, round: boolean?): Frame
+	local f = Instance.new("Frame")
+	f.Name = name
+	f.AnchorPoint = Vector2.new(0.5, 0.5)
+	f.Size = size
+	f.Position = pos
+	f.BackgroundColor3 = ORANGE
+	f.BorderSizePixel = 0
+	if round then
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(1, 0)
+		c.Parent = f
+	end
+	f.Parent = parent
+	return f
+end
+
+local function px(x: number, y: number): UDim2
+	return UDim2.fromOffset(x, y)
+end
+
+-- Builds the face plate and its gui on an R6 head. Returns the plate.
+function AshFace.Build(head: BasePart): BasePart
+	local plate = Instance.new("Part")
+	plate.Name = "AshFacePlate"
+	plate.Size = Vector3.new(W / 100, H / 100, 0.05)
+	plate.CFrame = head.CFrame * CFrame.new(0, 0.02, -0.6)
+	plate.Transparency = 1
+	plate.CanCollide = false
+	plate.CanQuery = false
+	plate.CanTouch = false
+	plate.Massless = true
+	plate.CastShadow = false
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = head
+	weld.Part1 = plate
+	weld.Parent = plate
+	plate.Parent = head
+
+	local gui = Instance.new("SurfaceGui")
+	gui.Name = "Face"
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	gui.PixelsPerStud = 100
+	gui.LightInfluence = 0 -- the eyes glow
+	gui.Brightness = 2
+	gui.ClipsDescendants = true
+	gui.ResetOnSpawn = false
+	gui.Parent = plate
+
+	for side, x in EYE_X do
+		local dir = if side == "Left" then 1 else -1
+
+		-- The circle (squashed, tilted and resized for expressions)
+		frame(gui, side .. "Eye", px(EYE, EYE), px(x, EYE_Y), true)
+
+		-- Happy: the top half of an orange ring, like ^
+		local happy = frame(gui, side .. "Happy", px(EYE + 4, EYE / 2), px(x, EYE_Y), false)
+		happy.BackgroundTransparency = 1
+		happy.ClipsDescendants = true
+		happy.Visible = false
+		local ring = frame(happy, "Ring", px(EYE, EYE), UDim2.new(0.5, 0, 1, 2), true)
+		ring.BackgroundTransparency = 1
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = ORANGE
+		stroke.Thickness = 5
+		stroke.Parent = ring
+
+		-- Squeezed shut: > (left eye) or < (right eye)
+		local shut = Instance.new("Frame")
+		shut.Name = side .. "Shut"
+		shut.BackgroundTransparency = 1
+		shut.AnchorPoint = Vector2.new(0.5, 0.5)
+		shut.Size = px(EYE, EYE)
+		shut.Position = px(x, EYE_Y)
+		shut.Visible = false
+		shut.Parent = gui
+		frame(shut, "Top", px(20, 5), UDim2.new(0.5, 0, 0.5, -5)).Rotation = 28 * dir
+		frame(shut, "Bottom", px(20, 5), UDim2.new(0.5, 0, 0.5, 5)).Rotation = -28 * dir
+	end
+
+	return plate
+end
+
+-- Expression targets. w, h: eye size as a share of the circle. tilt: degrees, inner
+-- corners down. shape: which drawing to show ("Eye", "Happy" or "Shut").
+local EXPRESSIONS = {
+	idle = { w = 1, h = 1, tilt = 0, shape = "Eye" },
+	determined = { w = 1.1, h = 0.62, tilt = 14, shape = "Eye" },
+	happy = { w = 1, h = 1, tilt = 0, shape = "Happy" },
+	falling = { w = 1.3, h = 1.3, tilt = 0, shape = "Eye" },
+	wince = { w = 1, h = 1, tilt = 0, shape = "Shut" },
+}
+local SHAPES = { "Eye", "Happy", "Shut" }
+
+-- Client side: drive an existing face. Returns nil if the character has none.
+function AshFace.new(character: Model)
+	local plate = character:FindFirstChild("AshFacePlate", true)
+	local gui = plate and plate:FindFirstChild("Face")
+	if not gui then
+		return nil
+	end
+	local self = setmetatable({}, AshFace)
+	self.gui = gui
+	self.expression = "idle"
+	self.state = { w = 1, h = 1, tilt = 0 }
+	self.blinkIn = 2 + math.random() * 2
+	self.blink = 0
+	return self
+end
+
+function AshFace:Choose(ctrl, speed: number): string
+	local C = Config
+	if ctrl.hurtTimer and ctrl.hurtTimer > C.HurtInvulnerability - 0.6 then
+		return "wince"
+	end
+	if not ctrl.grounded and ctrl.velocity.Y < -45 and not ctrl.homingTarget and not ctrl.stomping then
+		return "falling"
+	end
+	if ctrl.boosting or ctrl.homingTarget or speed > C.TopSpeed + 15 then
+		return "happy"
+	end
+	if speed > 20 or not ctrl.grounded then
+		return "determined"
+	end
+	return "idle"
+end
+
+function AshFace:Update(dt: number, ctrl, speed: number, hidden: boolean)
+	local gui = self.gui
+	if not gui.Parent then
+		return
+	end
+	gui.Enabled = not hidden
+	if hidden then
+		return
+	end
+
+	local name = self:Choose(ctrl, speed)
+	self.expression = name
+	local target = EXPRESSIONS[name]
+	local s = self.state
+	local k = 1 - math.exp(-14 * dt)
+	for _, key in { "w", "h", "tilt" } do
+		s[key] += (target[key] - s[key]) * k
+	end
+
+	-- Blink every few seconds: the circles squash flat for a moment
+	self.blinkIn -= dt
+	if self.blinkIn <= 0 then
+		self.blink = 0.12
+		self.blinkIn = 2 + math.random() * 3
+	end
+	self.blink = math.max(0, self.blink - dt)
+	local h = if self.blink > 0 then 0.12 else s.h
+
+	for side in EYE_X do
+		local dir = if side == "Left" then 1 else -1
+		local eye = gui[side .. "Eye"]
+		eye.Size = px(EYE * s.w, math.max(3, EYE * h))
+		eye.Rotation = s.tilt * dir
+		for _, shape in SHAPES do
+			gui[side .. shape].Visible = shape == target.shape
+		end
+	end
+end
+
+return AshFace
+]=====])
+script(f, 'ModuleScript', 'AshFx', [=====[-- Ash's local effects, driven by CharacterFx every frame:
+--   * the tattered red scarf tail streams and flutters behind him (a little rope sim)
+--   * his eyes change expression (AshFace)
+-- The scarf knot itself is built by AshBuilder on the server.
+
+local Workspace = game:GetService("Workspace")
+
+local Config = require(script.Parent.Config)
+local AshFace = require(script.Parent.AshFace)
+
+local AshFx = {}
+AshFx.__index = AshFx
+
+local SCARF = Color3.fromRGB(165, 24, 22)
+local SCARF_DARK = Color3.fromRGB(120, 14, 14)
+
+local function scarfPart(width: number, color: Color3): Part
+	local p = Instance.new("Part")
+	p.Name = "AshScarfTail"
+	p.Size = Vector3.new(width, 0.06, 0.5)
+	p.Color = color
+	p.Material = Enum.Material.SmoothPlastic
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	return p
+end
+
+function AshFx.Is(character: Model): boolean
+	return character:GetAttribute("AshCharacter") == true
+end
+
+function AshFx.new(character: Model, ctrl)
+	local self = setmetatable({}, AshFx)
+	self.ctrl = ctrl
+	self.time = 0
+
+	self.knot = character:FindFirstChild("AshScarfKnot", true)
+	self.torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+	self.face = AshFace.new(character)
+
+	-- Scarf tail: a chain of points hanging off the back of the knot, drawn as flat strips.
+	-- The last strip splits in two for a tattered end.
+	local folder = Instance.new("Folder")
+	folder.Name = "AshScarf"
+	folder.Parent = Workspace
+	self.folder = folder
+	local n = Config.AshScarfSegments
+	self.points, self.prev, self.strips = {}, {}, {}
+	for i = 1, n do
+		local width = 0.5 - 0.2 * (i - 1) / math.max(1, n - 1)
+		local color = if i % 2 == 0 then SCARF_DARK else SCARF
+		if i < n then
+			self.strips[i] = { scarfPart(width, color) }
+		else
+			self.strips[i] = { scarfPart(width * 0.45, SCARF), scarfPart(width * 0.45, SCARF_DARK) }
+		end
+		for _, p in self.strips[i] do
+			p.Parent = folder
+		end
+	end
+	self:ResetScarf()
+	return self
+end
+
+function AshFx:Anchor(): (Vector3?, CFrame?)
+	local knot = self.knot
+	if not (knot and knot.Parent and self.torso) then
+		return nil, nil
+	end
+	local cf = knot.CFrame
+	return (cf * CFrame.new(0, -0.05, knot.Size.Z / 2)).Position, self.torso.CFrame
+end
+
+-- Lay the scarf straight down the back (used at spawn and after a respawn teleport)
+function AshFx:ResetScarf()
+	local anchor, torso = self:Anchor()
+	if not anchor then
+		return
+	end
+	local down = -torso.UpVector * 0.7 + torso.LookVector * -0.3
+	for i = 1, Config.AshScarfSegments do
+		local p = anchor + down.Unit * Config.AshScarfSegmentLength * i
+		self.points[i] = p
+		self.prev[i] = p
+	end
+	self.lastAnchor = anchor
+end
+
+function AshFx:UpdateScarf(dt: number, speed: number, hidden: boolean)
+	local anchor, torso = self:Anchor()
+	if not anchor then
+		return
+	end
+	if hidden then
+		for _, strip in self.strips do
+			for _, p in strip do
+				p.Transparency = 1
+			end
+		end
+		self:ResetScarf()
+		return
+	end
+	if not self.lastAnchor or (anchor - self.lastAnchor).Magnitude > 40 then
+		self:ResetScarf()
+	end
+	self.lastAnchor = anchor
+
+	local C = Config
+	local n, len = C.AshScarfSegments, C.AshScarfSegmentLength
+	dt = math.min(dt, 1 / 30)
+	local damp = math.exp(-C.AshScarfDrag * dt)
+	local back = -torso.LookVector
+	local right = torso.RightVector
+	local up = torso.UpVector
+	local flap = math.clamp(speed / 120, 0, 1.5)
+
+	-- Verlet: keep momentum (minus air drag), fall, and flutter more the faster you go
+	for i = 1, n do
+		local p = self.points[i]
+		local v = (p - self.prev[i]) * damp
+		self.prev[i] = p
+		local wave = self.time * (8 + 10 * flap) - i * 0.9
+		local flutter = (right * math.sin(wave) * 0.6 + up * math.cos(wave * 1.3) * 0.8) * C.AshScarfFlutter * flap * (i / n)
+		self.points[i] = p + v + (Vector3.new(0, -C.Gravity * 0.35, 0) + flutter) * dt * dt
+	end
+	-- Keep each link its length (anchor fixed) and keep the tail behind the body
+	for _ = 1, 3 do
+		local last = anchor
+		for i = 1, n do
+			local p = self.points[i]
+			local rel = p - anchor
+			local depth = rel:Dot(back)
+			if depth < 0.15 then
+				p += back * (0.15 - depth)
+			end
+			local d = p - last
+			if d.Magnitude > 1e-4 then
+				p = last + d.Unit * len
+			else
+				p = last + back * len
+			end
+			self.points[i] = p
+			last = p
+		end
+	end
+
+	-- Draw the strips
+	local last = anchor
+	for i = 1, n do
+		local p = self.points[i]
+		local seg = p - last
+		local mid = (p + last) / 2
+		local look = if seg.Magnitude > 1e-4 then seg.Unit else back
+		local side = look:Cross(up)
+		if side.Magnitude < 0.1 then
+			side = look:Cross(back)
+		end
+		side = side.Unit
+		local normal = side:Cross(look)
+		local strips = self.strips[i]
+		if #strips == 1 then
+			local s = strips[1]
+			s.Size = Vector3.new(s.Size.X, s.Size.Y, len + 0.08)
+			s.CFrame = CFrame.fromMatrix(mid, side, normal, -look)
+			s.Transparency = 0
+		else
+			-- Tattered end: two ragged strips of different lengths, splayed apart
+			for k, s in strips do
+				local sign = if k == 1 then -1 else 1
+				local l = len * (if k == 1 then 1.1 else 0.75)
+				local off = side * sign * s.Size.X * 0.7
+				local dir = (look + side * sign * 0.25).Unit
+				local center = last + off + dir * l / 2
+				local sSide = dir:Cross(normal).Unit
+				s.Size = Vector3.new(s.Size.X, s.Size.Y, l)
+				s.CFrame = CFrame.fromMatrix(center, sSide, normal, -dir)
+				s.Transparency = 0
+			end
+		end
+		last = p
+	end
+end
+
+function AshFx:Update(dt: number, speed: number, hidden: boolean)
+	self.time += dt
+	self:UpdateScarf(dt, speed, hidden)
+	if self.face then
+		self.face:Update(dt, self.ctrl, speed, hidden)
+	end
+end
+
+function AshFx:Destroy()
+	self.folder:Destroy()
+end
+
+return AshFx
+]=====])
+script(f, 'ModuleScript', 'CharacterFx', [=====[-- Visuals for the local character: a speed-driven procedural run cycle
+-- (R6 and R15; other rigs fall back to the default run/idle/fall animations), a molten spin-ball while jumping, rolling or charging, and a fire trail
 -- plus glow while boosting, and glowing afterimages at very high speed.
 -- Everything here is local-only presentation.
 
@@ -18,6 +410,7 @@ local Workspace = game:GetService("Workspace")
 
 local Config = require(script.Parent.Config)
 local RunCycle = require(script.Parent.RunCycle)
+local AshFx = require(script.Parent.AshFx)
 
 local CharacterFx = {}
 CharacterFx.__index = CharacterFx
@@ -136,6 +529,10 @@ function CharacterFx.new(character: Model, humanoid: Humanoid, root: BasePart, c
 	self.ghostFolder = ghostFolder
 	self.ghosts = {}
 	self.ghostTimer = 0
+
+	if AshFx.Is(character) then
+		self.ash = AshFx.new(character, ctrl)
+	end
 
 	return self
 end
@@ -275,7 +672,17 @@ function CharacterFx:UpdatePose(dt: number)
 		return
 	end
 	local v = ctrl.velocity
-	rc:Update(dt, v.Magnitude, ctrl.grounded, v.Y)
+	-- How fast the heading is turning around our up axis, for banking into turns
+	local up = ctrl.visualUp or Vector3.yAxis
+	local flat = v - up * v:Dot(up)
+	local turnRate = 0
+	local last = self.lastFlat
+	if last and flat.Magnitude > 5 and last.Magnitude > 5 and dt > 0 then
+		local a, b = last.Unit, flat.Unit
+		turnRate = math.atan2(a:Cross(b):Dot(up), a:Dot(b)) / dt
+	end
+	self.lastFlat = flat
+	rc:Update(dt, v.Magnitude, ctrl.grounded, v.Y, turnRate)
 end
 
 function CharacterFx:Update(dt: number)
@@ -318,6 +725,9 @@ function CharacterFx:Update(dt: number)
 	end
 
 	self:UpdateGhosts(dt, speed)
+	if self.ash then
+		self.ash:Update(dt, speed, self.hidden)
+	end
 
 	self.trail.Enabled = ctrl.boosting
 	self.light.Brightness = ctrl.heat * 1.5 + (if ctrl.boosting then 2.5 else 0)
@@ -334,6 +744,9 @@ function CharacterFx:Destroy()
 	end
 	self.ball:Destroy()
 	self.ghostFolder:Destroy()
+	if self.ash then
+		self.ash:Destroy()
+	end
 	self.trail:Destroy()
 	self.light:Destroy()
 end
@@ -569,10 +982,21 @@ local Config = {
 	RunCycleSprintSpeed = 100, -- arms start sweeping back here
 	RunCycleSprintBlend = 50, -- ...and are fully back this much faster
 	RunCycleMinCadence = 1.4, -- steps cycles per second at walking pace
-	RunCycleMaxCadence = 5, -- cap so the legs don't strobe at 300 speed
-	RunCycleCadenceSpeed = 70, -- how quickly cadence climbs toward the cap
+	RunCycleMaxCadence = 2.45, -- cap so the legs don't strobe at 300 speed
+	RunCycleCadenceSpeed = 30, -- how quickly cadence climbs toward the cap
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
-	RunCycleExaggeration = 1.5, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
+	-- Overdrive: small extras from running top speed (TopSpeed) up to RunCycleOverdriveSpeed,
+	-- so the legs keep up with boosts and slopes. Below TopSpeed nothing changes.
+	RunCycleOverdriveSpeed = 200, -- the extras are fully in by this speed
+	RunCycleOverdriveCadence = 1.0, -- extra step cycles per second (2.45 -> 3.45)
+	RunCycleOverdriveStride = 0.12, -- leg stride grows by up to 12%
+	RunCycleOverdriveLean = 0.4, -- extra forward tilt of the torso by RunCycleOverdriveSpeed, radians
+	RunCycleRunLean = 0.45, -- forward tilt of the torso at full running speed, radians
+	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
+	RunCycleBankMax = 0.48, -- radians, the most it ever banks
+	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders
+	RunCycleArmSnap = 0.82, -- below 1 the arms hold forward/back and switch quickly (1 = smooth swing)
+	RunCycleExaggeration = 1.05, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
 
 	-- Afterimages: glowing ghost copies left behind at very high speed
 	AfterimageSpeed = 140, -- ghosts start appearing above this speed (running tops out at 90)
@@ -580,6 +1004,13 @@ local Config = {
 	AfterimageInterval = 0.05, -- seconds between ghosts
 	AfterimageLifetime = 0.3, -- seconds each ghost takes to fade out
 	AfterimageStartTransparency = 0.45, -- how solid a fresh ghost is at full strength
+
+	-- Ash (the main character)
+	AshBodyColor = Color3.fromRGB(30, 200, 255), -- electric cyan: the opposite of lava orange, so he stands out
+	AshScarfSegments = 7, -- links in the scarf tail
+	AshScarfSegmentLength = 0.5,
+	AshScarfDrag = 3, -- air drag on the scarf; higher streams it straighter behind
+	AshScarfFlutter = 40, -- how hard the tail whips about at speed
 
 	CollisionGroup = "MomentumPlayer",
 }
@@ -1797,14 +2228,15 @@ end
 
 return LockOn
 ]=====])
-script(f, 'ModuleScript', 'RunCycle', [=====[-- Procedural, speed-driven run cycle for R15 characters.
+script(f, 'ModuleScript', 'RunCycle', [=====[-- Procedural, speed-driven run cycle for R15 and R6 characters.
 -- Instead of playing a fixed animation, every frame this poses the joints
 -- (the Transform of each Motor6D, or AnimationConstraint on newer avatars) from a gait cycle whose cadence, stride and posture all
 -- follow the controller's speed:
 --   standing  -> idle breathing
 --   0-20      -> walk: short stride, relaxed arms, upright
 --   20-90     -> run: long stride, high knee lift, pumping arms, forward lean, bounce
---   90+       -> sprint: arms swept back, deep lean, legs at full cadence
+--   90+       -> sprint: deep lean, arms snapping forward and back, legs at full cadence
+--   90-200    -> overdrive: the sprint gets a bit faster, longer and leaner so it keeps up
 -- In the air it blends to a fall pose. Tuning lives in Config (RunCycle* values).
 
 local Config = require(script.Parent.Config)
@@ -1841,26 +2273,88 @@ local function rot(x: number, y: number, z: number): CFrame
 	return CFrame.fromEulerAnglesXYZ(x, y, z)
 end
 
--- Returns nil for rigs it can't drive (R6), so the caller can fall back.
+-- R6 joints, each with the parent part it lives in
+local R6_JOINTS = {
+	RootJoint = "HumanoidRootPart",
+	Neck = "Torso",
+	["Left Shoulder"] = "Torso",
+	["Right Shoulder"] = "Torso",
+	["Left Hip"] = "Torso",
+	["Right Hip"] = "Torso",
+}
+
+local function findJoint(parent: Instance?, name: string): Instance?
+	local joint = parent and parent:FindFirstChild(name)
+	if joint and (joint:IsA("Motor6D") or joint:IsA("AnimationConstraint")) then
+		return joint
+	end
+	return nil
+end
+
+-- Works on R15 and R6 rigs. Returns nil for rigs it can't drive, so the caller can fall back.
 function RunCycle.new(character: Model)
 	local motors = {}
+	local r6 = false
 	for name, partName in JOINTS do
-		local part = character:FindFirstChild(partName)
-		local joint = part and part:FindFirstChild(name)
-		if not (joint and (joint:IsA("Motor6D") or joint:IsA("AnimationConstraint"))) then
-			return nil
+		local joint = findJoint(character:FindFirstChild(partName), name)
+		if not joint then
+			motors = nil
+			break
 		end
 		motors[name] = joint
 	end
+	if not motors then
+		-- Try R6: same gait, mapped onto its six joints in Update
+		motors = {}
+		r6 = true
+		for name, partName in R6_JOINTS do
+			local joint = findJoint(character:FindFirstChild(partName), name)
+			if not (joint and joint:IsA("Motor6D")) then
+				return nil
+			end
+			motors[name] = joint
+		end
+	end
 	local self = setmetatable({}, RunCycle)
 	self.motors = motors
+	self.r6 = r6
+	if r6 then
+		-- Each R6 joint's frame is rotated relative to its parts; poses are converted into it
+		self.frames = {}
+		for name, joint in motors do
+			self.frames[name] = joint.C0.Rotation
+		end
+	end
 	self.animator = character:FindFirstChildWhichIsA("Animator", true)
 	self.phase = 0
 	self.time = 0
 	self.air = 0
 	self.speed = 0
 	self.weight = 0 -- fades the pose in after Reset (e.g. leaving the spin-ball)
+	self.bank = 0 -- sideways lean into turns
 	return self
+end
+
+-- Map the R15 pose onto R6. R6 has one torso part, so it takes the R15 root and
+-- waist together, and the hips are countered by the waist so the legs still
+-- swing from straight down. There are no knees or elbows, so those drop out.
+function RunCycle:ToR6(pose)
+	local torso = pose.Root * pose.Waist
+	local waistInv = pose.Waist.Rotation:Inverse()
+	local r6 = {
+		RootJoint = torso,
+		Neck = pose.Neck,
+		["Left Shoulder"] = pose.LeftShoulder,
+		["Right Shoulder"] = pose.RightShoulder,
+		["Left Hip"] = waistInv * pose.LeftHip,
+		["Right Hip"] = waistInv * pose.RightHip,
+	}
+	-- Poses are in the parts' own axes; express them in each joint's frame
+	for name, cf in r6 do
+		local f = self.frames[name]
+		r6[name] = f:Inverse() * cf * f
+	end
+	return r6
 end
 
 -- Target pose for every joint, from the gait at this speed.
@@ -1873,6 +2367,10 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	local move = smooth(speed / C.RunCycleWalkSpeed) -- 0 standing, 1 walking
 	local run = smooth((speed - C.RunCycleWalkSpeed) / (C.RunCycleRunSpeed - C.RunCycleWalkSpeed))
 	local sprint = smooth((speed - C.RunCycleSprintSpeed) / C.RunCycleSprintBlend)
+	-- Overdrive: past running top speed (boosts, slopes) the same gait stretches a little
+	-- further so it keeps up: longer stride, faster steps and a deeper forward tilt (arms unchanged)
+	local od = self:Overdrive(speed)
+	local stretch = 1 + C.RunCycleOverdriveStride * od
 
 	local s = math.sin(self.phase)
 	local c = math.cos(self.phase)
@@ -1882,8 +2380,8 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 
 	-- Legs: hips swing opposite each other; the knee folds while that leg swings forward.
 	-- The forward swing is bigger than the back swing, for high cartoon knees.
-	local hipAmp = (lerp(0.45, 0.95, run) + 0.15 * sprint) * x
-	local kneeAmp = (lerp(0.55, 1.7, run) + 0.3 * sprint) * x
+	local hipAmp = (lerp(0.45, 0.95, run) + 0.15 * sprint) * x * stretch
+	local kneeAmp = (lerp(0.55, 1.7, run) + 0.3 * sprint) * x * stretch
 	local function hip(v: number): number
 		return if v > 0 then math.min(1.7, v * lerp(1, 1.3, run)) else v
 	end
@@ -1894,30 +2392,33 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	local ankleL = (0.25 * s - 0.2 * run * x * math.max(0, -c)) * move
 	local ankleR = (-0.25 * s - 0.2 * run * x * math.max(0, c)) * move
 
-	-- Arms: big pumping counter-swing at run, swept far back at sprint
-	local armAmp = lerp(0.35, 0.9, run) * x * move
-	local swingL = -s * armAmp
-	local swingR = s * armAmp
-	local sweptBack = -1.15 - 0.35 * (x - 1)
-	local shoulderLX = lerp(swingL, sweptBack + 0.1 * x * s, sprint)
-	local shoulderRX = lerp(swingR, sweptBack - 0.1 * x * s, sprint)
-	local shoulderOut = lerp(0.05, 0.2, sprint) * x
+	-- Arms: one thrust forward while the other is flung back, snapping between the two in
+	-- time with the stride (they hold each pose and switch quickly), and floating a little
+	-- away from the shoulders, cartoon style
+	local armAmp = lerp(0.35, 1.1, run) * x * move
+	local snap = math.sign(s) * math.abs(s) ^ lerp(1, C.RunCycleArmSnap, run)
+	local shoulderLX = -snap * armAmp
+	local shoulderRX = snap * armAmp
+	local shoulderOut = lerp(0.08, 0.32, run) * move
+	local detach = C.RunCycleArmDetach * run * move
 	local elbowL = lerp(lerp(0.15, 1.5, run) * move + 0.1, 0.25, sprint) * lerp(1, 1.15, run * (x - 1))
 	local elbowR = elbowL
 
 	-- Torso: lean into speed, twist against the hips, bounce on each footfall,
 	-- and rock the hips side to side
-	local lean = -(lerp(0.04, 0.28, run) * move + 0.22 * sprint) * x
+	local lean = -(lerp(0.04, C.RunCycleRunLean, run) * move + 0.10 * sprint + C.RunCycleOverdriveLean * od) * x
 	local twist = 0.18 * s * run * (1 - 0.5 * sprint) * x
 	local bounce = (math.abs(c) - 0.5) * lerp(0.08, 0.35, run) * x * x * move
 	local sway = 0.08 * s * run * (x - 1) * 2
 	local breathe = (1 - move) * 0.03 * math.sin(t * 2.2)
 
-	pose.Root = CFrame.new(0, bounce, 0) * rot(0, -twist * 0.5, sway)
+	-- The whole body banks into turns like a bike, more the faster and tighter the turn
+	pose.Root = CFrame.new(0, bounce, 0) * rot(0, -twist * 0.5, sway + self.bank * move)
 	pose.Waist = rot(lean + breathe, twist, -sway * 0.6)
 	pose.Neck = rot(-lean * 0.7 - breathe, -twist * 0.8, 0)
-	pose.LeftShoulder = rot(shoulderLX, 0, -shoulderOut)
-	pose.RightShoulder = rot(shoulderRX, 0, shoulderOut)
+	-- Detached arms slide toward where they point: forward arm out in front, back arm behind
+	pose.LeftShoulder = CFrame.new(0, -0.15 * detach, snap * detach) * rot(0, 0, -shoulderOut) * rot(shoulderLX, 0, 0)
+	pose.RightShoulder = CFrame.new(0, -0.15 * detach, -snap * detach) * rot(0, 0, shoulderOut) * rot(shoulderRX, 0, 0)
 	pose.LeftElbow = rot(elbowL, 0, 0)
 	pose.RightElbow = rot(elbowR, 0, 0)
 	pose.LeftHip = rot(hipL, 0, 0)
@@ -1955,15 +2456,25 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	return pose
 end
 
-function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalSpeed: number)
+-- 0 at running top speed, 1 at RunCycleOverdriveSpeed and above
+function RunCycle:Overdrive(speed: number): number
+	local C = Config
+	return smooth((speed - C.TopSpeed) / math.max(1, C.RunCycleOverdriveSpeed - C.TopSpeed))
+end
+
+-- turnRate: how fast the heading is turning, radians per second (positive = left)
+function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalSpeed: number, turnRate: number?)
 	self.time += dt
 	local C = Config
 	-- Smooth the speed (not the pose) so gait changes ease in without damping the swing
 	self.speed += (speed - self.speed) * (1 - math.exp(-C.RunCycleSmoothing * dt))
+	local bank = math.clamp((turnRate or 0) * speed * C.RunCycleBank, -C.RunCycleBankMax, C.RunCycleBankMax)
+	self.bank += (bank - self.bank) * (1 - math.exp(-8 * dt))
 	speed = self.speed
 	-- Cadence rises quickly at first, then levels off so top speeds don't strobe
 	local cadence = C.RunCycleMinCadence
 		+ (C.RunCycleMaxCadence - C.RunCycleMinCadence) * (1 - math.exp(-speed / C.RunCycleCadenceSpeed))
+		+ C.RunCycleOverdriveCadence * self:Overdrive(speed)
 	if grounded then
 		self.phase = (self.phase + dt * cadence * 2 * math.pi) % (2 * math.pi)
 	end
@@ -1978,6 +2489,9 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 
 	self.weight += (1 - self.weight) * (1 - math.exp(-10 * dt))
 	local pose = self:Pose(speed, grounded, verticalSpeed)
+	if self.r6 then
+		pose = self:ToR6(pose)
+	end
 	for name, joint in self.motors do
 		joint.Transform = CFrame.identity:Lerp(pose[name], self.weight)
 	end
@@ -1995,6 +2509,191 @@ return RunCycle
 ]=====])
 end
 do local f = put(game:GetService('ServerScriptService'), 'MomentumServer')
+script(f, 'ModuleScript', 'AshBuilder', [=====[-- Builds Ash, the playable main character, on the standard Roblox R6 rig
+-- (Head, Torso, two arms, two legs), kept simple to match the game's art style.
+-- His look comes from colors plus a few small touches:
+--   * a bright body color that contrasts with the lava levels (Config.AshBodyColor)
+--   * glowing orange circle eyes that change expression (AshFace)
+--   * a red scarf knot around the neck (AshFx streams the tail behind him)
+--
+-- The rig uses the standard R6 part and joint names, so the run cycle (which
+-- drives R6 joints too), spin-ball and afterimages work on it.
+--
+-- Decoration parts are named so the client can find them:
+--   AshScarfKnot  the scarf around the neck (the tail hangs off its back)
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Momentum = ReplicatedStorage:WaitForChild("Momentum")
+local Config = require(Momentum:WaitForChild("Config"))
+local AshFace = require(Momentum:WaitForChild("AshFace"))
+
+local AshBuilder = {}
+
+local SCARF = Color3.fromRGB(165, 24, 22)
+
+-- Standard R6 sizes and positions, with the HumanoidRootPart's center at the origin
+local BODY = {
+	HumanoidRootPart = { Vector3.new(2, 2, 1), Vector3.new(0, 0, 0) },
+	Torso = { Vector3.new(2, 2, 1), Vector3.new(0, 0, 0) },
+	Head = { Vector3.new(2, 1, 1), Vector3.new(0, 1.5, 0) },
+	["Left Arm"] = { Vector3.new(1, 2, 1), Vector3.new(-1.5, 0, 0) },
+	["Right Arm"] = { Vector3.new(1, 2, 1), Vector3.new(1.5, 0, 0) },
+	["Left Leg"] = { Vector3.new(1, 2, 1), Vector3.new(-0.5, -2, 0) },
+	["Right Leg"] = { Vector3.new(1, 2, 1), Vector3.new(0.5, -2, 0) },
+}
+
+-- The standard R6 Motor6Ds: name = { parent, child, C0, C1 }
+local JOINTS = {
+	RootJoint = {
+		"HumanoidRootPart", "Torso",
+		CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0),
+		CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0),
+	},
+	Neck = {
+		"Torso", "Head",
+		CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0),
+		CFrame.new(0, -0.5, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0),
+	},
+	["Right Shoulder"] = {
+		"Torso", "Right Arm",
+		CFrame.new(1, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0),
+		CFrame.new(-0.5, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0),
+	},
+	["Left Shoulder"] = {
+		"Torso", "Left Arm",
+		CFrame.new(-1, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0),
+		CFrame.new(0.5, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0),
+	},
+	["Right Hip"] = {
+		"Torso", "Right Leg",
+		CFrame.new(1, -1, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0),
+		CFrame.new(0.5, 1, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0),
+	},
+	["Left Hip"] = {
+		"Torso", "Left Leg",
+		CFrame.new(-1, -1, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0),
+		CFrame.new(-0.5, 1, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0),
+	},
+}
+
+local function bodyPart(name: string, size: Vector3, center: Vector3): Part
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Size = size
+	p.CFrame = CFrame.new(center)
+	p.Color = Config.AshBodyColor
+	p.Material = Enum.Material.SmoothPlastic
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.CanCollide = false
+	p.CanTouch = false
+	return p
+end
+
+-- A small decoration welded onto a body part. cf is relative to that part.
+local function deco(body: BasePart, name: string, size: Vector3, cf: CFrame, color: Color3, neon: boolean?)
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Size = size
+	p.CFrame = body.CFrame * cf
+	p.Color = color
+	p.Material = if neon then Enum.Material.Neon else Enum.Material.SmoothPlastic
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Massless = true
+	p.CastShadow = not neon
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = body
+	weld.Part1 = p
+	weld.Parent = p
+	p.Parent = body
+	return p
+end
+
+local function addLooks(parts)
+	local head, torso = parts.Head, parts.Torso
+
+	-- Classic R6 head shape
+	local mesh = Instance.new("SpecialMesh")
+	mesh.MeshType = Enum.MeshType.Head
+	mesh.Scale = Vector3.new(1.25, 1.25, 1.25)
+	mesh.Parent = head
+
+	-- Orange circle eyes (expressions are driven on the client by AshFx)
+	AshFace.Build(head)
+
+	-- Red scarf knot around the neck
+	deco(torso, "AshScarfKnot", Vector3.new(1.3, 0.3, 1.1), CFrame.new(0, 0.92, 0), SCARF)
+end
+
+-- Returns a fresh Ash model, ready to be used as StarterPlayer.StarterCharacter.
+function AshBuilder.Build(): Model
+	local model = Instance.new("Model")
+	model.Name = "StarterCharacter"
+
+	local parts = {}
+	for name, spec in BODY do
+		local p = bodyPart(name, spec[1], spec[2])
+		parts[name] = p
+		p.Parent = model
+	end
+	local root = parts.HumanoidRootPart
+	root.Transparency = 1
+	root.CastShadow = false
+	model.PrimaryPart = root
+
+	for name, spec in JOINTS do
+		local motor = Instance.new("Motor6D")
+		motor.Name = name
+		motor.Part0 = parts[spec[1]]
+		motor.Part1 = parts[spec[2]]
+		motor.C0 = spec[3]
+		motor.C1 = spec[4]
+		motor.Parent = parts[spec[1]]
+	end
+
+	local humanoid = Instance.new("Humanoid")
+	humanoid.RigType = Enum.HumanoidRigType.R6
+	humanoid.HipHeight = 0
+	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	humanoid.Parent = model
+
+	addLooks(parts)
+
+	model:SetAttribute("AshCharacter", true)
+	return model
+end
+
+return AshBuilder
+]=====])
+script(f, 'Script', 'AshCharacter', [=====[-- Makes Ash the character everyone plays as: builds him once at server start,
+-- installs him as StarterPlayer.StarterCharacter, and (re)spawns anyone who
+-- loaded in before he was ready.
+
+local Players = game:GetService("Players")
+local StarterPlayer = game:GetService("StarterPlayer")
+
+local AshBuilder = require(script.Parent:WaitForChild("AshBuilder"))
+
+local old = StarterPlayer:FindFirstChild("StarterCharacter")
+if old then
+	old:Destroy()
+end
+local ash = AshBuilder.Build()
+ash.Parent = StarterPlayer
+
+-- Anyone who spawned as their own avatar before Ash existed gets respawned as him
+for _, player in Players:GetPlayers() do
+	local character = player.Character
+	if character and not character:GetAttribute("AshCharacter") then
+		player:LoadCharacter()
+	end
+end
+]=====])
 script(f, 'Script', 'BuildTestLevel', [=====[-- Builds the test level when the server starts, unless one is already in Workspace
 -- (for example because you generated it in Edit mode to look at or tweak).
 require(script.Parent:WaitForChild("LevelBuilder")).Build()

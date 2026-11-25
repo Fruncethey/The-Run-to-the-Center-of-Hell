@@ -10,12 +10,15 @@ A custom momentum character controller for Roblox, plus a test level.
 | `src/shared/Momentum/Controller.luau` | The controller: own velocity, slope physics, ground snapping, surface alignment (walls, loops, ceilings), jump, roll, spin-dash, heat and boost. |
 | `src/shared/Momentum/ChaseCamera.luau` | Chase camera that swings behind your direction of travel, pulls back and widens FOV with speed. |
 | `src/shared/Momentum/Hud.luau` | Speedometer, heat meter, state readout, controls hint. |
-| `src/shared/Momentum/RunCycle.luau` | Procedural run cycle driven by speed: walk, run and sprint blend together, with idle and in-air poses. |
+| `src/shared/Momentum/RunCycle.luau` | Procedural run cycle (R15 and R6) driven by speed: walk, run and sprint blend together, with idle and in-air poses. |
 | `src/shared/Momentum/CharacterFx.luau` | Runs the run cycle (R6 falls back to default animations), spin-ball, boost trail, glow and afterimages. |
 | `src/shared/Momentum/InputState.luau` | Keyboard and gamepad input. |
 | `src/shared/Momentum/LockOn.luau` | Picks the enemy to lock onto in the air, draws the reticle, handles touching enemies (defeat or get hurt). |
 | `src/server/EnemyService.server.luau` | Spawns Cinder Imps at every `EnemySpawn` marker, makes them hover and patrol, confirms defeats and respawns them. |
+| `src/shared/Momentum/AshFx.luau` | Ash's live effects: the streaming scarf tail and his eye expressions. |
+| `src/shared/Momentum/AshFace.luau` | Ash's orange circle eyes and their expressions. |
 | `src/client/MomentumClient.client.luau` | Starts everything for the local player. |
+| `src/server/AshBuilder.luau` + `AshCharacter.server.luau` | Builds Ash, the main character, and makes him everyone's `StarterCharacter`. |
 | `src/server/PlayerSetup.server.luau` | Collision group for characters, turns off shift-lock (Shift is boost). |
 | `src/server/LevelBuilder.luau` + `BuildTestLevel.server.luau` | Builds the test level on server start (skips it if `Workspace.HellTestLevel` already exists). |
 | `InstallInStudio.luau` | One-paste installer for the Studio Command Bar (no Rojo needed). |
@@ -116,23 +119,56 @@ Anything tagged `HomingTarget` can be locked onto, so later things like soul-cha
 
 ## Run cycle
 
-`RunCycle.luau` poses the R15 joints every frame instead of playing an uploaded animation, so the gait follows your exact speed:
+`RunCycle.luau` poses the R15 (or R6) joints every frame instead of playing an uploaded animation, so the gait follows your exact speed:
 
 | Speed | Look |
 |---|---|
 | Standing | Idle breathing |
 | Up to 20 | Walk: short stride, relaxed arm swing, upright |
 | 20 to 60 | Blends into a run: longer stride, high knee lift, pumping arms, forward lean, bounce |
-| 100 to 150 and up | Sprint: arms swept back, deep lean, full stride |
+| 100 to 150 and up | Sprint: deep lean, full stride, arms snapping forward and back |
 | In the air | Arms out for balance, one knee tucked, a little flail when falling fast |
 
-Step rate climbs from 1.4 to 5 steps per second and levels off so the legs don't strobe at 300 speed.
+While running, the arms work cartoon style: one is thrust forward while the other is flung back, and they hold
+those poses and snap across in time with the stride (`RunCycleArmSnap`). They also float a little away from the
+shoulders, sliding toward where they point (`RunCycleArmDetach`, 0.04 studs).
+
+At speed the whole body banks into turns like a bike, more the faster and tighter the turn
+(`RunCycleBank`, capped at `RunCycleBankMax` = 0.48 radians).
+
+Step rate climbs from 1.4 to 2.45 cycles per second by running top speed (90).
+
+Above top speed (boosts, slopes) the same gait gets small extras so the legs keep up, fully in by
+`RunCycleOverdriveSpeed` (200): about 1 more step cycle per second (`RunCycleOverdriveCadence`), a 12% longer
+leg stride (`RunCycleOverdriveStride`) and a much deeper forward tilt (`RunCycleOverdriveLean`). The arm motion
+never changes with it.
+
+The torso tilts forward with speed: about 27 degrees at a full run (`RunCycleRunLean`), 38 degrees at 155 and
+about 57 degrees by 200.
 Tune it with the `RunCycle*` values in `Config.luau`.
 
-Running and sprinting are cartoon-exaggerated by `RunCycleExaggeration` (1.5): bigger strides with high knees
-(forward swing larger than the back swing), wider arm pumps, arms swept further back at sprint, a deeper lean,
+Running and sprinting are cartoon-exaggerated by `RunCycleExaggeration` (1.05): bigger strides with high knees
+(forward swing larger than the back swing), wider arm pumps, a deeper lean,
 a bigger bounce on each footfall and a side-to-side hip rock. Walking stays natural. Set it to 1 for the
 realistic gait, or around 2 for very rubbery legs.
+
+## Ash, the main character
+
+Everyone plays as Ash, built on the standard R6 rig to keep the art style simple. `AshBuilder` makes him on
+server start (plain parts, no uploaded assets) and installs him as `StarterPlayer.StarterCharacter`. His look is
+mostly color plus a few touches:
+
+- Electric cyan body (`AshBodyColor` in `Config.luau`), the opposite of lava orange, so he stands out in every level.
+- Two glowing orange circle eyes and no mouth (`AshFace.luau`). The eyes alone show his mood: round and blinking
+  when idle, squashed and tilted inward when running, happy ^ ^ arcs above top speed or when boosting or homing,
+  bigger when falling, and squeezed shut > < when he gets hit.
+- A red scarf. The knot is part of the body; the tail is a small rope simulation that hangs at rest and
+  streams and whips behind him at speed, splitting into two ragged ends.
+
+The run cycle drives R6 too: the same gait, with the torso taking the lean and twist, and no knees or elbows.
+Tune the scarf with the `Ash*` values in `Config.luau`, and his colors in `AshBuilder.luau`.
+The scarf tail and changing expressions are drawn on your own screen only;
+other players see his resting eyes.
 
 ## Afterimages
 

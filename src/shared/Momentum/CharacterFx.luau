@@ -1,5 +1,5 @@
--- Visuals for the local character: a speed-driven procedural run cycle (R15;
--- R6 falls back to the default run/idle/fall animations), a molten spin-ball while jumping, rolling or charging, and a fire trail
+-- Visuals for the local character: a speed-driven procedural run cycle
+-- (R6 and R15; other rigs fall back to the default run/idle/fall animations), a molten spin-ball while jumping, rolling or charging, and a fire trail
 -- plus glow while boosting, and glowing afterimages at very high speed.
 -- Everything here is local-only presentation.
 
@@ -7,6 +7,7 @@ local Workspace = game:GetService("Workspace")
 
 local Config = require(script.Parent.Config)
 local RunCycle = require(script.Parent.RunCycle)
+local AshFx = require(script.Parent.AshFx)
 
 local CharacterFx = {}
 CharacterFx.__index = CharacterFx
@@ -125,6 +126,10 @@ function CharacterFx.new(character: Model, humanoid: Humanoid, root: BasePart, c
 	self.ghostFolder = ghostFolder
 	self.ghosts = {}
 	self.ghostTimer = 0
+
+	if AshFx.Is(character) then
+		self.ash = AshFx.new(character, ctrl)
+	end
 
 	return self
 end
@@ -264,7 +269,17 @@ function CharacterFx:UpdatePose(dt: number)
 		return
 	end
 	local v = ctrl.velocity
-	rc:Update(dt, v.Magnitude, ctrl.grounded, v.Y)
+	-- How fast the heading is turning around our up axis, for banking into turns
+	local up = ctrl.visualUp or Vector3.yAxis
+	local flat = v - up * v:Dot(up)
+	local turnRate = 0
+	local last = self.lastFlat
+	if last and flat.Magnitude > 5 and last.Magnitude > 5 and dt > 0 then
+		local a, b = last.Unit, flat.Unit
+		turnRate = math.atan2(a:Cross(b):Dot(up), a:Dot(b)) / dt
+	end
+	self.lastFlat = flat
+	rc:Update(dt, v.Magnitude, ctrl.grounded, v.Y, turnRate)
 end
 
 function CharacterFx:Update(dt: number)
@@ -307,6 +322,9 @@ function CharacterFx:Update(dt: number)
 	end
 
 	self:UpdateGhosts(dt, speed)
+	if self.ash then
+		self.ash:Update(dt, speed, self.hidden)
+	end
 
 	self.trail.Enabled = ctrl.boosting
 	self.light.Brightness = ctrl.heat * 1.5 + (if ctrl.boosting then 2.5 else 0)
@@ -323,6 +341,9 @@ function CharacterFx:Destroy()
 	end
 	self.ball:Destroy()
 	self.ghostFolder:Destroy()
+	if self.ash then
+		self.ash:Destroy()
+	end
 	self.trail:Destroy()
 	self.light:Destroy()
 end

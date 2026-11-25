@@ -103,10 +103,21 @@ local Config = {
 	RunCycleSprintSpeed = 100, -- arms start sweeping back here
 	RunCycleSprintBlend = 50, -- ...and are fully back this much faster
 	RunCycleMinCadence = 1.4, -- steps cycles per second at walking pace
-	RunCycleMaxCadence = 5, -- cap so the legs don't strobe at 300 speed
-	RunCycleCadenceSpeed = 70, -- how quickly cadence climbs toward the cap
+	RunCycleMaxCadence = 2.45, -- cap so the legs don't strobe at 300 speed
+	RunCycleCadenceSpeed = 30, -- how quickly cadence climbs toward the cap
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
-	RunCycleExaggeration = 1.5, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
+	-- Overdrive: small extras from running top speed (TopSpeed) up to RunCycleOverdriveSpeed,
+	-- so the legs keep up with boosts and slopes. Below TopSpeed nothing changes.
+	RunCycleOverdriveSpeed = 200, -- the extras are fully in by this speed
+	RunCycleOverdriveCadence = 1.0, -- extra step cycles per second (2.45 -> 3.45)
+	RunCycleOverdriveStride = 0.12, -- leg stride grows by up to 12%
+	RunCycleOverdriveLean = 0.4, -- extra forward tilt of the torso by RunCycleOverdriveSpeed, radians
+	RunCycleRunLean = 0.45, -- forward tilt of the torso at full running speed, radians
+	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
+	RunCycleBankMax = 0.48, -- radians, the most it ever banks
+	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders
+	RunCycleArmSnap = 0.82, -- below 1 the arms hold forward/back and switch quickly (1 = smooth swing)
+	RunCycleExaggeration = 1.05, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
 
 	-- Afterimages: glowing ghost copies left behind at very high speed
 	AfterimageSpeed = 140, -- ghosts start appearing above this speed (running tops out at 90)
@@ -114,6 +125,13 @@ local Config = {
 	AfterimageInterval = 0.05, -- seconds between ghosts
 	AfterimageLifetime = 0.3, -- seconds each ghost takes to fade out
 	AfterimageStartTransparency = 0.45, -- how solid a fresh ghost is at full strength
+
+	-- Ash (the main character)
+	AshBodyColor = Color3.fromRGB(30, 200, 255), -- electric cyan: the opposite of lava orange, so he stands out
+	AshScarfSegments = 7, -- links in the scarf tail
+	AshScarfSegmentLength = 0.5,
+	AshScarfDrag = 3, -- air drag on the scarf; higher streams it straighter behind
+	AshScarfFlutter = 40, -- how hard the tail whips about at speed
 
 	CollisionGroup = "MomentumPlayer",
 }
