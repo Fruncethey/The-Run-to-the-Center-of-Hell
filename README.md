@@ -81,6 +81,22 @@ The heat meter fills while you go faster than 50 studs/s. Boost needs the bar pa
 - Input is read on flat ground relative to the camera, then tilted onto the surface you're on, so "forward" keeps
   meaning "keep going" on walls and upside down.
 
+## Rolling vs running
+
+Hold the roll button (Q) while moving faster than 20 to curl into a roll. It trades control for momentum:
+
+| | Running | Rolling |
+|---|---|---|
+| Holding forward | Speeds you up to `TopSpeed` (90) | Does nothing: slopes are your engine |
+| Above `TopSpeed` | Sheds speed back to 90 (`RunOverspeedDrag` 25/s) | Keeps it; friction is only 4/s |
+| Downhill | Normal slope gain | Twice the gain (`RollSlopeDown`) |
+| Uphill | Normal slope loss | Half the loss (`RollSlopeUp`) |
+| Steering | Full turn rate | About a third (`RollTurnFactor`) |
+| Braking (hold back) | Strong (160/s) | Weak (30/s) |
+
+You uncurl below 8 speed, or by jumping. Rolling also destroys enemies you hit.
+Pressing roll in the air stomps, but only after 0.25 s in the air (`StompMinAirTime`), so cresting a small bump won't slam you down.
+
 ## Air movement and homing attack
 
 - **Steering:** in the air your flight path bends toward the stick at `AirTurnRate`, so speed carries you instead of

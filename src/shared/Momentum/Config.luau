@@ -22,6 +22,7 @@ local Config = {
 	AirDashSpeed = 110, -- jump again in the air with no target locked
 	AirDashLift = 8,
 	StompSpeed = 170, -- roll button in the air slams you down
+	StompMinAirTime = 0.25, -- so pressing roll as you crest a small bump doesn't stomp
 
 	-- Jump
 	JumpPower = 55, -- launched along the surface normal
@@ -42,12 +43,16 @@ local Config = {
 	VisualUpRate = 12,
 
 	-- Rolling and spin-dash
-	RollMinSpeed = 20,
-	RollEndSpeed = 8,
-	RollFriction = 10,
-	RollTurnRate = 1.6,
-	RollSlopeDown = 1.7, -- rolling downhill gains more speed
-	RollSlopeUp = 0.7, -- and loses less going uphill
+	-- Rolling keeps momentum better than running but steers and brakes worse,
+	-- and holding forward doesn't speed you up: slopes are your engine.
+	RollMinSpeed = 20, -- hold the roll button above this speed to curl up
+	RollEndSpeed = 8, -- uncurl below this speed
+	RollFriction = 4, -- running sheds speed above TopSpeed much faster (RunOverspeedDrag)
+	RollTurnFactor = 0.35, -- share of running's turn rate you keep while rolling
+	RollBrake = 30, -- holding back while rolling (running brakes at Decel)
+	RollSlopeDown = 2.0, -- rolling downhill gains twice the speed running does
+	RollSlopeUp = 0.5, -- and loses half as much going uphill
+	RunOverspeedDrag = 25, -- running above TopSpeed (not boosting) bleeds back down to it
 	SpinDashMaxStartSpeed = 20,
 	SpinChargeTime = 0.9, -- seconds of holding for a full charge
 	SpinRevBonus = 0.25, -- each jump tap while charging adds this much charge
