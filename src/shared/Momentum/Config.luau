@@ -113,6 +113,12 @@ local Config = {
 	RunCycleOverdriveStride = 0.12, -- leg stride grows by up to 12%
 	RunCycleOverdriveLean = 0.4, -- extra forward tilt of the torso by RunCycleOverdriveSpeed, radians
 	RunCycleRunLean = 0.45, -- forward tilt of the torso at full running speed, radians
+	-- Top-speed pose: above normal running speed (boosts, slopes) the arms sweep behind the back
+	RunCycleTopStart = 100, -- starts blending in here (running tops out at 90)
+	RunCycleTopFull = 150, -- fully in by this speed
+	RunCycleTopLean = 0.5, -- extra forward tilt of the torso, radians
+	RunCycleTopArmBack = 1.35, -- how far back the arms sweep, radians
+	RunCycleTopArmOut = 0.2, -- arms angle slightly out from the body, radians
 	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
 	RunCycleBankMax = 0.48, -- radians, the most it ever banks
 	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders

@@ -7,6 +7,7 @@
 --   20-90     -> run: long stride, high knee lift, pumping arms, forward lean, bounce
 --   90+       -> sprint: deep lean, arms snapping forward and back, cadence keeps scaling with speed
 --   90-200    -> overdrive: slightly longer stride and a deeper forward tilt above top speed
+--   100-150   -> top speed: arms swept back behind the body, torso tipped well forward
 -- In the air it blends to a fall pose. Tuning lives in Config (RunCycle* values).
 
 local Config = require(script.Parent.Config)
@@ -232,6 +233,38 @@ function RunCycle:Overdrive(speed: number): number
 	return smooth((speed - C.TopSpeed) / math.max(1, C.RunCycleOverdriveSpeed - C.TopSpeed))
 end
 
+-- Top speed (boosts, slopes): the arms sweep back behind the body and the torso
+-- tips further forward, blended in by k (0 = normal run, 1 = full top-speed pose)
+function RunCycle:ApplyTopSpeed(pose, k: number)
+	local C = Config
+	local lean = C.RunCycleTopLean * k
+	local back = C.RunCycleTopArmBack + 0.06 * math.sin(self.phase * 2)
+	local out = C.RunCycleTopArmOut
+	local armL = rot(0, 0, -out) * rot(-back, 0, 0)
+	local armR = rot(0, 0, out) * rot(-back, 0, 0)
+	if self.r6 then
+		-- Poses here are already in each R6 joint's frame
+		local function conv(name: string, cf: CFrame): CFrame
+			local f = self.frames[name]
+			return f:Inverse() * cf * f
+		end
+		pose.RootJoint = conv("RootJoint", rot(-lean, 0, 0)) * pose.RootJoint
+		pose.Neck = conv("Neck", rot(lean * 0.7, 0, 0)) * pose.Neck
+		-- The legs hang from the torso, so tip them back the other way to keep them under him
+		pose["Left Hip"] = conv("Left Hip", rot(lean, 0, 0)) * pose["Left Hip"]
+		pose["Right Hip"] = conv("Right Hip", rot(lean, 0, 0)) * pose["Right Hip"]
+		pose["Left Shoulder"] = pose["Left Shoulder"]:Lerp(conv("Left Shoulder", armL), k)
+		pose["Right Shoulder"] = pose["Right Shoulder"]:Lerp(conv("Right Shoulder", armR), k)
+	else
+		pose.Waist = rot(-lean, 0, 0) * pose.Waist
+		pose.Neck = rot(lean * 0.7, 0, 0) * pose.Neck
+		pose.LeftShoulder = pose.LeftShoulder:Lerp(armL, k)
+		pose.RightShoulder = pose.RightShoulder:Lerp(armR, k)
+		pose.LeftElbow = pose.LeftElbow:Lerp(rot(0.15, 0, 0), k)
+		pose.RightElbow = pose.RightElbow:Lerp(rot(0.15, 0, 0), k)
+	end
+end
+
 -- turnRate: how fast the heading is turning, radians per second (positive = left)
 function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalSpeed: number, turnRate: number?)
 	self.time += dt
@@ -262,6 +295,11 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 	local pose = self:Pose(speed, grounded, verticalSpeed)
 	if self.r6 then
 		pose = self:ToR6(pose)
+	end
+	-- Past normal running speed, blend into the arms-back top-speed pose
+	local top = smooth((speed - C.RunCycleTopStart) / (C.RunCycleTopFull - C.RunCycleTopStart)) * (1 - self.air)
+	if top > 0.001 then
+		self:ApplyTopSpeed(pose, top)
 	end
 	for name, joint in self.motors do
 		joint.Transform = CFrame.identity:Lerp(pose[name], self.weight)
