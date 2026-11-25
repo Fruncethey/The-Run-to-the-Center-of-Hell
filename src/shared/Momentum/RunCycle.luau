@@ -100,6 +100,7 @@ function RunCycle.new(character: Model)
 	self.air = 0
 	self.speed = 0
 	self.weight = 0 -- fades the pose in after Reset (e.g. leaving the spin-ball)
+	self.bank = 0 -- sideways lean into turns
 	return self
 end
 
@@ -170,13 +171,14 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 
 	-- Torso: lean into speed, twist against the hips, bounce on each footfall,
 	-- and rock the hips side to side
-	local lean = -(lerp(0.04, 0.28, run) * move + 0.22 * sprint) * x
+	local lean = -(lerp(0.04, 0.36, run) * move + 0.22 * sprint) * x
 	local twist = 0.18 * s * run * (1 - 0.5 * sprint) * x
 	local bounce = (math.abs(c) - 0.5) * lerp(0.08, 0.35, run) * x * x * move
 	local sway = 0.08 * s * run * (x - 1) * 2
 	local breathe = (1 - move) * 0.03 * math.sin(t * 2.2)
 
-	pose.Root = CFrame.new(0, bounce, 0) * rot(0, -twist * 0.5, sway)
+	-- The whole body banks into turns like a bike, more the faster and tighter the turn
+	pose.Root = CFrame.new(0, bounce, 0) * rot(0, -twist * 0.5, sway + self.bank * move)
 	pose.Waist = rot(lean + breathe, twist, -sway * 0.6)
 	pose.Neck = rot(-lean * 0.7 - breathe, -twist * 0.8, 0)
 	-- Detached arms slide toward where they point: forward arm out in front, back arm behind
@@ -219,11 +221,14 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	return pose
 end
 
-function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalSpeed: number)
+-- turnRate: how fast the heading is turning, radians per second (positive = left)
+function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalSpeed: number, turnRate: number?)
 	self.time += dt
 	local C = Config
 	-- Smooth the speed (not the pose) so gait changes ease in without damping the swing
 	self.speed += (speed - self.speed) * (1 - math.exp(-C.RunCycleSmoothing * dt))
+	local bank = math.clamp((turnRate or 0) * speed * C.RunCycleBank, -C.RunCycleBankMax, C.RunCycleBankMax)
+	self.bank += (bank - self.bank) * (1 - math.exp(-8 * dt))
 	speed = self.speed
 	-- Cadence rises quickly at first, then levels off so top speeds don't strobe
 	local cadence = C.RunCycleMinCadence

@@ -133,6 +133,10 @@ While running, the arms work cartoon style: one is thrust forward while the othe
 those poses and snap across in time with the stride (`RunCycleArmSnap`). They also float a little away from the
 shoulders, sliding toward where they point (`RunCycleArmDetach`, 0.6 studs).
 
+At speed the whole body banks into turns like a bike, more the faster and tighter the turn
+(`RunCycleBank`, capped at `RunCycleBankMax` = 0.7 radians), and the running lean is deeper
+(about 0.39 radians at a normal run).
+
 Step rate climbs from 1.4 to 5 steps per second and levels off so the legs don't strobe at 300 speed.
 Tune it with the `RunCycle*` values in `Config.luau`.
 

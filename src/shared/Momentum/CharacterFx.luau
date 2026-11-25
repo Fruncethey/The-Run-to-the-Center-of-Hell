@@ -269,7 +269,17 @@ function CharacterFx:UpdatePose(dt: number)
 		return
 	end
 	local v = ctrl.velocity
-	rc:Update(dt, v.Magnitude, ctrl.grounded, v.Y)
+	-- How fast the heading is turning around our up axis, for banking into turns
+	local up = ctrl.visualUp or Vector3.yAxis
+	local flat = v - up * v:Dot(up)
+	local turnRate = 0
+	local last = self.lastFlat
+	if last and flat.Magnitude > 5 and last.Magnitude > 5 and dt > 0 then
+		local a, b = last.Unit, flat.Unit
+		turnRate = math.atan2(a:Cross(b):Dot(up), a:Dot(b)) / dt
+	end
+	self.lastFlat = flat
+	rc:Update(dt, v.Magnitude, ctrl.grounded, v.Y, turnRate)
 end
 
 function CharacterFx:Update(dt: number)

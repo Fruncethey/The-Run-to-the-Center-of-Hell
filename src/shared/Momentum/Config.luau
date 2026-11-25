@@ -106,6 +106,8 @@ local Config = {
 	RunCycleMaxCadence = 5, -- cap so the legs don't strobe at 300 speed
 	RunCycleCadenceSpeed = 70, -- how quickly cadence climbs toward the cap
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
+	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
+	RunCycleBankMax = 0.7, -- radians, the most it ever banks
 	RunCycleArmDetach = 0.6, -- studs the running arms float away from the shoulders
 	RunCycleArmSnap = 0.4, -- below 1 the arms hold forward/back and switch quickly (1 = smooth swing)
 	RunCycleExaggeration = 1.5, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
