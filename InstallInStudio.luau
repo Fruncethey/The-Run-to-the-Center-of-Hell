@@ -11,7 +11,8 @@ end
 do local f = put(game:GetService('ReplicatedStorage'), 'Momentum')
 script(f, 'ModuleScript', 'CharacterFx', [=====[-- Visuals for the local character: a speed-driven procedural run cycle (R15;
 -- R6 falls back to the default run/idle/fall animations), a molten spin-ball while jumping, rolling or charging, and a fire trail
--- plus glow while boosting. Everything here is local-only presentation.
+-- plus glow while boosting, and glowing afterimages at very high speed.
+-- Everything here is local-only presentation.
 
 local Workspace = game:GetService("Workspace")
 
@@ -22,6 +23,10 @@ local CharacterFx = {}
 CharacterFx.__index = CharacterFx
 
 local BALL_SIZE = 4.6
+
+-- Afterimage tint: fresh ghosts are hot yellow-orange, cooling to deep red as they fade
+local GHOST_HOT = Color3.fromRGB(255, 190, 70)
+local GHOST_COLD = Color3.fromRGB(190, 20, 10)
 
 local function loadTrack(animator: Animator, animate: Instance?, folderName: string)
 	local folder = animate and animate:FindFirstChild(folderName)
@@ -125,7 +130,108 @@ function CharacterFx.new(character: Model, humanoid: Humanoid, root: BasePart, c
 	end
 	self.descConn = character.DescendantAdded:Connect(track)
 
+	local ghostFolder = Instance.new("Folder")
+	ghostFolder.Name = "MomentumAfterimages"
+	ghostFolder.Parent = Workspace
+	self.ghostFolder = ghostFolder
+	self.ghosts = {}
+	self.ghostTimer = 0
+
 	return self
+end
+
+-- Copy one visible part as a ghost: same shape and pose, glowing, no collisions.
+local function ghostPart(source: BasePart): BasePart?
+	local archivable = source.Archivable
+	source.Archivable = true
+	local ok, copy = pcall(source.Clone, source)
+	source.Archivable = archivable
+	if not ok or not copy then
+		return nil
+	end
+	for _, child in copy:GetChildren() do
+		if not (child:IsA("SpecialMesh") or child:IsA("DataModelMesh")) then
+			child:Destroy()
+		end
+	end
+	if copy:IsA("MeshPart") then
+		copy.TextureID = ""
+	end
+	local mesh = copy:FindFirstChildWhichIsA("SpecialMesh")
+	if mesh then
+		mesh.TextureId = ""
+	end
+	copy.Anchored = true
+	copy.CanCollide = false
+	copy.CanQuery = false
+	copy.CanTouch = false
+	copy.CastShadow = false
+	copy.Massless = true
+	copy.Material = Enum.Material.Neon
+	copy.Color = GHOST_HOT
+	copy.LocalTransparencyModifier = 0
+	copy.CFrame = source.CFrame
+	return copy
+end
+
+function CharacterFx:SpawnGhost(strength: number)
+	local sources = {}
+	if self.hidden then
+		-- Curled up: ghost the spin-ball instead of the body
+		table.insert(sources, self.ball)
+	else
+		for _, p in self.parts do
+			if p:IsA("BasePart") and p.Parent and p ~= self.root and p.Transparency < 0.95 then
+				table.insert(sources, p)
+			end
+		end
+	end
+	local ghost = { parts = {}, age = 0, strength = strength }
+	for _, source in sources do
+		local copy = ghostPart(source)
+		if copy then
+			copy.Transparency = 1
+			copy.Parent = self.ghostFolder
+			table.insert(ghost.parts, copy)
+		end
+	end
+	table.insert(self.ghosts, ghost)
+end
+
+function CharacterFx:UpdateGhosts(dt: number, speed: number)
+	local C = Config
+	local strength = math.clamp((speed - C.AfterimageSpeed) / (C.AfterimageFullSpeed - C.AfterimageSpeed), 0, 1)
+	if strength > 0 then
+		self.ghostTimer += dt
+		if self.ghostTimer >= C.AfterimageInterval then
+			self.ghostTimer = 0
+			self:SpawnGhost(0.35 + 0.65 * strength)
+		end
+	else
+		self.ghostTimer = C.AfterimageInterval -- first ghost appears right away next time
+	end
+
+	-- Fade and cool every ghost, oldest first
+	local i = 1
+	while i <= #self.ghosts do
+		local ghost = self.ghosts[i]
+		ghost.age += dt
+		local t = ghost.age / C.AfterimageLifetime
+		if t >= 1 then
+			for _, part in ghost.parts do
+				part:Destroy()
+			end
+			table.remove(self.ghosts, i)
+		else
+			local solid = (1 - C.AfterimageStartTransparency) * ghost.strength * (1 - t) ^ 1.5
+			local color = GHOST_HOT:Lerp(GHOST_COLD, t)
+			for _, part in ghost.parts do
+				part.Transparency = 1 - solid
+				part.Color = color
+			end
+			i += 1
+		end
+	end
 end
 
 function CharacterFx:SetHidden(hidden: boolean)
@@ -211,6 +317,8 @@ function CharacterFx:Update(dt: number)
 		end
 	end
 
+	self:UpdateGhosts(dt, speed)
+
 	self.trail.Enabled = ctrl.boosting
 	self.light.Brightness = ctrl.heat * 1.5 + (if ctrl.boosting then 2.5 else 0)
 	self.light.Range = 10 + ctrl.heat * 8
@@ -225,6 +333,7 @@ function CharacterFx:Destroy()
 		self.descConn:Disconnect()
 	end
 	self.ball:Destroy()
+	self.ghostFolder:Destroy()
 	self.trail:Destroy()
 	self.light:Destroy()
 end
@@ -464,6 +573,13 @@ local Config = {
 	RunCycleCadenceSpeed = 70, -- how quickly cadence climbs toward the cap
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
 	RunCycleExaggeration = 1.5, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
+
+	-- Afterimages: glowing ghost copies left behind at very high speed
+	AfterimageSpeed = 140, -- ghosts start appearing above this speed (running tops out at 90)
+	AfterimageFullSpeed = 200, -- ...and are at full strength by this speed
+	AfterimageInterval = 0.05, -- seconds between ghosts
+	AfterimageLifetime = 0.3, -- seconds each ghost takes to fade out
+	AfterimageStartTransparency = 0.45, -- how solid a fresh ghost is at full strength
 
 	CollisionGroup = "MomentumPlayer",
 }

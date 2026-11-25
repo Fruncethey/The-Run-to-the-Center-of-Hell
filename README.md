@@ -11,7 +11,7 @@ A custom momentum character controller for Roblox, plus a test level.
 | `src/shared/Momentum/ChaseCamera.luau` | Chase camera that swings behind your direction of travel, pulls back and widens FOV with speed. |
 | `src/shared/Momentum/Hud.luau` | Speedometer, heat meter, state readout, controls hint. |
 | `src/shared/Momentum/RunCycle.luau` | Procedural run cycle driven by speed: walk, run and sprint blend together, with idle and in-air poses. |
-| `src/shared/Momentum/CharacterFx.luau` | Runs the run cycle (R6 falls back to default animations), spin-ball, boost trail and glow. |
+| `src/shared/Momentum/CharacterFx.luau` | Runs the run cycle (R6 falls back to default animations), spin-ball, boost trail, glow and afterimages. |
 | `src/shared/Momentum/InputState.luau` | Keyboard and gamepad input. |
 | `src/shared/Momentum/LockOn.luau` | Picks the enemy to lock onto in the air, draws the reticle, handles touching enemies (defeat or get hurt). |
 | `src/server/EnemyService.server.luau` | Spawns Cinder Imps at every `EnemySpawn` marker, makes them hover and patrol, confirms defeats and respawns them. |
@@ -133,6 +133,14 @@ Running and sprinting are cartoon-exaggerated by `RunCycleExaggeration` (1.5): b
 (forward swing larger than the back swing), wider arm pumps, arms swept further back at sprint, a deeper lean,
 a bigger bounce on each footfall and a side-to-side hip rock. Walking stays natural. Set it to 1 for the
 realistic gait, or around 2 for very rubbery legs.
+
+## Afterimages
+
+Above 140 speed (`AfterimageSpeed`) the character leaves glowing ghost copies behind it: one every 0.05 s, each
+starting hot orange and cooling to red as it fades over 0.3 s. They get more solid as you approach 200
+(`AfterimageFullSpeed`). Running tops out at 90, so you see them when boosting, spin-dashing, rolling down long slopes
+or homing. While curled up, the spin-ball leaves the ghosts instead of the body. Tune them with the `Afterimage*`
+values in `Config.luau`. Like the run cycle, they're drawn on your own screen only.
 
 ## Known limits
 

@@ -108,6 +108,13 @@ local Config = {
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
 	RunCycleExaggeration = 1.5, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
 
+	-- Afterimages: glowing ghost copies left behind at very high speed
+	AfterimageSpeed = 140, -- ghosts start appearing above this speed (running tops out at 90)
+	AfterimageFullSpeed = 200, -- ...and are at full strength by this speed
+	AfterimageInterval = 0.05, -- seconds between ghosts
+	AfterimageLifetime = 0.3, -- seconds each ghost takes to fade out
+	AfterimageStartTransparency = 0.45, -- how solid a fresh ghost is at full strength
+
 	CollisionGroup = "MomentumPlayer",
 }
 
