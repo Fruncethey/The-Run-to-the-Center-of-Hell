@@ -11,6 +11,7 @@ local ChaseCamera = require(Momentum:WaitForChild("ChaseCamera"))
 local Hud = require(Momentum:WaitForChild("Hud"))
 local CharacterFx = require(Momentum:WaitForChild("CharacterFx"))
 local InputState = require(Momentum:WaitForChild("InputState"))
+local LockOn = require(Momentum:WaitForChild("LockOn"))
 
 local player = Players.LocalPlayer
 
@@ -39,6 +40,7 @@ local active = nil
 local function stop()
 	if active then
 		active.fx:Destroy()
+		active.lockOn:Destroy()
 		active = nil
 	end
 end
@@ -69,7 +71,11 @@ local function onCharacter(character: Model)
 
 	disableDefaultControls()
 	for _, state in Enum.HumanoidStateType:GetEnumItems() do
-		if state ~= Enum.HumanoidStateType.Physics and state ~= Enum.HumanoidStateType.Dead then
+		if
+			state ~= Enum.HumanoidStateType.Physics
+			and state ~= Enum.HumanoidStateType.Dead
+			and state ~= Enum.HumanoidStateType.None
+		then
 			pcall(humanoid.SetStateEnabled, humanoid, state, false)
 		end
 	end
@@ -86,7 +92,9 @@ local function onCharacter(character: Model)
 	ctrl:AddIgnore(fx.ball)
 	camera:Attach(ctrl, { character, fx.ball })
 
-	active = { ctrl = ctrl, fx = fx, character = character }
+	local lockOn = LockOn.new(ctrl, player:WaitForChild("PlayerGui"))
+
+	active = { ctrl = ctrl, fx = fx, lockOn = lockOn, character = character }
 	humanoid.Died:Connect(function()
 		if active and active.character == character then
 			stop()
@@ -114,6 +122,7 @@ preSimulation:Connect(function(a, b)
 	end
 	local cam = Workspace.CurrentCamera
 	ctrl:Step(dt, if cam then cam.CFrame else CFrame.new())
+	active.lockOn:Update(dt)
 	ctrl:Apply()
 	active.fx:UpdatePose(dt)
 end)

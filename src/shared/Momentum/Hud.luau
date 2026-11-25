@@ -102,7 +102,7 @@ function Hud.new(playerGui: PlayerGui)
 	})
 
 	label(gui, {
-		Text = "WASD move   Space jump   Hold Q spin-dash / roll   Shift boost   Right-drag camera   R respawn",
+		Text = "WASD move   Space jump (in air: homing attack on a locked imp, or air dash)   Hold Q spin-dash / roll (in air: stomp)   Shift boost   Right-drag camera   R respawn",
 		TextSize = 14,
 		Font = Enum.Font.GothamMedium,
 		Position = UDim2.fromOffset(16, 52),
@@ -126,7 +126,13 @@ function Hud:Update(ctrl, dt: number)
 	self.fill.Size = UDim2.fromScale(ctrl.heat, 1)
 
 	local state
-	if ctrl.charging then
+	if ctrl.hurtTimer > Config.HurtInvulnerability - 0.6 then
+		state = "OUCH"
+	elseif ctrl.homingTarget then
+		state = "HOMING ATTACK"
+	elseif ctrl.stomping then
+		state = "STOMP"
+	elseif ctrl.charging then
 		state = string.format("CHARGING %d%%", math.floor(ctrl.spinCharge * 100))
 	elseif ctrl.boosting then
 		state = "BOOST"

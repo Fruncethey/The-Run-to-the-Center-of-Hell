@@ -370,7 +370,15 @@ local Config = {
 	SlopeFactor = 0.55, -- share of gravity that pushes you along slopes
 	TurnRateSlow = 9, -- radians/sec when standing still
 	TurnRateFast = 1.4, -- radians/sec at top speed and above
-	AirAccel = 45,
+
+	-- Air movement
+	AirAccel = 45, -- speeding up in the air (only up to TopSpeed)
+	AirTurnRate = 2.2, -- radians/sec you can bend your flight path
+	AirBrake = 70, -- slowdown when holding against your direction in the air
+	AirDrag = 4, -- slowdown above TopSpeed while airborne (not while boosting)
+	AirDashSpeed = 110, -- jump again in the air with no target locked
+	AirDashLift = 8,
+	StompSpeed = 170, -- roll button in the air slams you down
 
 	-- Jump
 	JumpPower = 55, -- launched along the surface normal
@@ -428,6 +436,18 @@ local Config = {
 	FovBase = 70,
 	FovMax = 95,
 	FovBoostKick = 8,
+
+	-- Homing attack and enemies
+	HomingRange = 75, -- how far away an enemy can be locked onto
+	HomingConeDot = 0.2, -- how far off your heading it can be (cosine of the angle)
+	HomingSpeed = 190,
+	HomingHitRadius = 4.5,
+	HomingMaxTime = 1.0, -- give up if the target hasn't been reached by then
+	HomingBounce = 55, -- upward pop after a hit, so you can chain to the next one
+	EnemyContactRadius = 2.6, -- added to the enemy's own radius
+	EnemyKnockback = 45,
+	EnemyHeatLoss = 0.25, -- heat lost when an enemy hits you
+	HurtInvulnerability = 1.2, -- seconds you can't be hit again
 
 	-- Procedural run cycle (R15)
 	RunCycleWalkSpeed = 20, -- full walk stride by this speed
@@ -522,6 +542,16 @@ function Controller.new(character: Model, humanoid: Humanoid, root: BasePart)
 	self.boosting = false
 	self.heat = 0
 
+	-- Air moves and homing attack
+	self.airDashed = false
+	self.stomping = false
+	self.homingTarget = nil -- BasePart we're flying at
+	self.homingTime = 0
+	self.lockTarget = nil -- set each frame by the lock-on system
+	self.attackTimer = 0 -- brief window after an attack where touching an enemy still defeats it
+	self.hurtTimer = 0
+	self.onEnemyHit = nil -- callback(part) when a homing attack connects
+
 	self.spawnPosition = root.Position
 	self.spawnFacing = self.facing
 
@@ -530,6 +560,7 @@ function Controller.new(character: Model, humanoid: Humanoid, root: BasePart)
 		jumpHeld = false,
 		jumpPressed = false,
 		rollHeld = false,
+		rollPressed = false,
 		boostHeld = false,
 	}
 
@@ -592,17 +623,32 @@ function Controller:Step(dt: number, camCF: CFrame)
 	dt = math.min(dt, 1 / 20)
 	local input = self.input
 	self.airGrace = math.max(0, self.airGrace - dt)
+	self.attackTimer = math.max(0, self.attackTimer - dt)
+	self.hurtTimer = math.max(0, self.hurtTimer - dt)
 
 	local planeUp = if self.grounded then self.up else WORLD_UP
 	local wish = self:GetWishDirection(camCF, planeUp)
 
-	-- Jump, or rev the spin-dash while charging
+	-- Jump, or rev the spin-dash while charging. In the air: homing attack if an
+	-- enemy is locked on, otherwise a one-time air dash.
 	if input.jumpPressed then
 		input.jumpPressed = false
 		if self.charging then
 			self.spinCharge = math.min(1, self.spinCharge + Config.SpinRevBonus)
 		elseif self.grounded then
 			self:Jump()
+		elseif not self.homingTarget then
+			if self.lockTarget then
+				self:StartHoming(self.lockTarget)
+			elseif not self.airDashed then
+				self:AirDash(wish)
+			end
+		end
+	end
+	if input.rollPressed then
+		input.rollPressed = false
+		if not self.grounded and not self.homingTarget and not self.stomping then
+			self:Stomp()
 		end
 	end
 	if self.jumping then
@@ -620,7 +666,9 @@ function Controller:Step(dt: number, camCF: CFrame)
 	self:UpdateRollAndCharge(dt, wish)
 	self:UpdateBoostAndHeat(dt)
 
-	if self.grounded then
+	if self.homingTarget then
+		self:UpdateHoming(dt)
+	elseif self.grounded then
 		self:GroundMovement(dt, wish)
 	else
 		self:AirMovement(dt, wish)
@@ -641,6 +689,9 @@ function Controller:Step(dt: number, camCF: CFrame)
 			self:ProbeGround(sdt)
 		else
 			self:ProbeLanding(sdt)
+		end
+		if self.homingTarget then
+			self:CheckHomingHit()
 		end
 	end
 
@@ -713,7 +764,11 @@ end
 
 function Controller:UpdateBoostAndHeat(dt: number)
 	local speed = self.velocity.Magnitude
-	local want = self.input.boostHeld and not self.charging and self.heat > 0
+	local want = self.input.boostHeld
+		and not self.charging
+		and not self.stomping
+		and self.homingTarget == nil
+		and self.heat > 0
 	if want and not self.boosting and self.heat < Config.BoostMinHeat then
 		want = false
 	end
@@ -821,21 +876,160 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 	self.velocity = vel
 end
 
+-- Air control: bend your flight path toward the stick (limited turn rate, so
+-- speed carries you), speed up to TopSpeed, brake by pulling back, and bleed off
+-- a little extra speed above TopSpeed.
 function Controller:AirMovement(dt: number, wish: Vector3)
 	local vel = self.velocity + Vector3.new(0, -Config.Gravity * dt, 0)
-	if wish.Magnitude > 0.05 then
-		local h = flatten(vel)
-		local cap = math.max(h.Magnitude, Config.TopSpeed)
-		local nh = h + flatten(wish) * Config.AirAccel * dt
-		if nh.Magnitude > cap then
-			nh = nh.Unit * cap
+	if self.stomping then
+		self.velocity = vel
+		return
+	end
+
+	local h = flatten(vel)
+	local hs = h.Magnitude
+	local amount = wish.Magnitude
+	if amount > 0.05 then
+		local w = flatten(wish) / amount
+		if hs > 5 then
+			local dir = h / hs
+			if w:Dot(dir) < -0.5 then
+				hs = math.max(0, hs - Config.AirBrake * amount * dt)
+			else
+				dir = rotateToward(dir, w, WORLD_UP, Config.AirTurnRate * amount * dt)
+				if hs < Config.TopSpeed then
+					hs = math.min(Config.TopSpeed, hs + Config.AirAccel * amount * dt)
+				end
+			end
+			h = dir * hs
+		else
+			h += w * Config.AirAccel * amount * dt
 		end
-		vel = Vector3.new(nh.X, vel.Y, nh.Z)
 	end
-	if vel.Y < -Config.TerminalVelocity then
-		vel = Vector3.new(vel.X, -Config.TerminalVelocity, vel.Z)
+
+	hs = h.Magnitude
+	if hs > Config.TopSpeed and not self.boosting then
+		h *= math.max(Config.TopSpeed, hs - Config.AirDrag * dt) / hs
 	end
+
+	vel = Vector3.new(h.X, math.max(vel.Y, -Config.TerminalVelocity), h.Z)
 	self.velocity = vel
+end
+
+function Controller:AirDash(wish: Vector3)
+	local dir = safeUnit(flatten(wish), nil)
+		or safeUnit(flatten(self.velocity), nil)
+		or safeUnit(flatten(self.facing), Vector3.xAxis)
+	local speed = math.max(flatten(self.velocity).Magnitude, Config.AirDashSpeed)
+	self.velocity = dir * speed + Vector3.new(0, Config.AirDashLift, 0)
+	self.facing = dir
+	self.airDashed = true
+	self.ball = true
+	self.jumping = false
+	self.attackTimer = 0.3
+end
+
+function Controller:Stomp()
+	self.velocity = Vector3.new(0, -Config.StompSpeed, 0)
+	self.stomping = true
+	self.ball = true
+	self.jumping = false
+	self.boosting = false
+end
+
+function Controller:StartHoming(target: BasePart)
+	self.homingTarget = target
+	self.homingTime = 0
+	self.ball = true
+	self.jumping = false
+	self.stomping = false
+end
+
+function Controller:CancelHoming()
+	self.homingTarget = nil
+	self.attackTimer = 0.2
+end
+
+local function targetAlive(part: BasePart?): boolean
+	return part ~= nil and part.Parent ~= nil and part:IsDescendantOf(Workspace) and not part:GetAttribute("Defeated")
+end
+
+function Controller:UpdateHoming(dt: number)
+	local target = self.homingTarget
+	self.homingTime += dt
+	if not targetAlive(target) or self.homingTime > Config.HomingMaxTime then
+		self:CancelHoming()
+		return
+	end
+	local to = target.Position - self.position
+	local dir = safeUnit(to, nil)
+	if dir then
+		self.velocity = dir * Config.HomingSpeed
+		self.facing = safeUnit(flatten(dir), self.facing)
+	end
+end
+
+function Controller:CheckHomingHit()
+	local target = self.homingTarget
+	if target and (target.Position - self.position).Magnitude <= Config.HomingHitRadius then
+		self:HomingHit(target)
+	end
+end
+
+function Controller:HomingHit(target: BasePart)
+	local side = safeUnit(flatten(target.Position - self.position), Vector3.zero)
+	self.homingTarget = nil
+	self.velocity = WORLD_UP * Config.HomingBounce + side * 12
+	self.grounded = false
+	self.groundPart = nil
+	self.airDashed = false
+	self.stomping = false
+	self.ball = true
+	self.attackTimer = 0.25
+	self.airGrace = 0.1
+	if self.onEnemyHit then
+		self.onEnemyHit(target)
+	end
+end
+
+-- True while touching an enemy should defeat it rather than hurt you.
+function Controller:IsAttacking(): boolean
+	return self.ball
+		or self.rolling
+		or self.charging
+		or self.boosting
+		or self.stomping
+		or self.homingTarget ~= nil
+		or self.attackTimer > 0
+end
+
+-- Defeated an enemy by touching it (jumping, rolling, boosting into it).
+function Controller:BounceOff()
+	if not self.grounded then
+		self.velocity = Vector3.new(self.velocity.X, math.max(self.velocity.Y, Config.HomingBounce * 0.8), self.velocity.Z)
+		self.airDashed = false
+		self.stomping = false
+	end
+end
+
+-- An enemy hit you: get knocked away and lose some heat.
+function Controller:Hurt(from: Vector3)
+	if self.hurtTimer > 0 then
+		return
+	end
+	local away = safeUnit(flatten(self.position - from), nil) or -safeUnit(flatten(self.facing), Vector3.xAxis)
+	self.velocity = away * Config.EnemyKnockback + WORLD_UP * 30
+	self.position += WORLD_UP * 0.3
+	self.grounded = false
+	self.groundPart = nil
+	self.rolling = false
+	self.charging = false
+	self.boosting = false
+	self.ball = false
+	self.homingTarget = nil
+	self.airGrace = 0.2
+	self.hurtTimer = Config.HurtInvulnerability
+	self.heat = math.max(0, self.heat - Config.EnemyHeatLoss)
 end
 
 -- Sweep the body sphere along `motion`, sliding along walls and climbing onto
@@ -924,6 +1118,12 @@ function Controller:Land(n: Vector3, part: Instance?)
 	self.grounded = true
 	self.jumping = false
 	self.ball = false
+	self.airDashed = false
+	if self.stomping or self.homingTarget then
+		self.attackTimer = 0.15 -- a stomp still flattens whatever you land next to
+	end
+	self.stomping = false
+	self.homingTarget = nil
 	self.rolling = self.input.rollHeld and self.velocity.Magnitude >= Config.RollMinSpeed
 end
 
@@ -950,6 +1150,9 @@ function Controller:Respawn()
 	self.charging = false
 	self.boosting = false
 	self.ball = false
+	self.airDashed = false
+	self.stomping = false
+	self.homingTarget = nil
 	self.heat = 0
 	self.respawnCount = (self.respawnCount or 0) + 1
 end
@@ -1072,7 +1275,7 @@ function Hud.new(playerGui: PlayerGui)
 	})
 
 	label(gui, {
-		Text = "WASD move   Space jump   Hold Q spin-dash / roll   Shift boost   Right-drag camera   R respawn",
+		Text = "WASD move   Space jump (in air: homing attack on a locked imp, or air dash)   Hold Q spin-dash / roll (in air: stomp)   Shift boost   Right-drag camera   R respawn",
 		TextSize = 14,
 		Font = Enum.Font.GothamMedium,
 		Position = UDim2.fromOffset(16, 52),
@@ -1096,7 +1299,13 @@ function Hud:Update(ctrl, dt: number)
 	self.fill.Size = UDim2.fromScale(ctrl.heat, 1)
 
 	local state
-	if ctrl.charging then
+	if ctrl.hurtTimer > Config.HurtInvulnerability - 0.6 then
+		state = "OUCH"
+	elseif ctrl.homingTarget then
+		state = "HOMING ATTACK"
+	elseif ctrl.stomping then
+		state = "STOMP"
+	elseif ctrl.charging then
 		state = string.format("CHARGING %d%%", math.floor(ctrl.spinCharge * 100))
 	elseif ctrl.boosting then
 		state = "BOOST"
@@ -1121,8 +1330,8 @@ return Hud
 ]=====])
 script(f, 'ModuleScript', 'InputState', [=====[-- Keyboard and gamepad input, collected into one table the controller reads.
 --   Move: WASD / arrows / left stick
---   Jump: Space / A
---   Spin-dash & roll: Q, LeftCtrl or C / X or B
+--   Jump (homing attack / air dash in the air): Space / A
+--   Spin-dash & roll (stomp in the air): Q, LeftCtrl or C / X or B
 --   Boost: LeftShift or E / R2 or Y
 --   Respawn: R / Select
 
@@ -1158,6 +1367,7 @@ function InputState.new()
 		jumpHeld = false,
 		jumpPressed = false,
 		rollHeld = false,
+		rollPressed = false,
 		boostHeld = false,
 	}
 	self.stick = Vector2.zero
@@ -1169,6 +1379,14 @@ function InputState.new()
 		end
 		if io.KeyCode == Enum.KeyCode.Space or io.KeyCode == Enum.KeyCode.ButtonA then
 			self.state.jumpPressed = true
+		elseif
+			io.KeyCode == Enum.KeyCode.Q
+			or io.KeyCode == Enum.KeyCode.LeftControl
+			or io.KeyCode == Enum.KeyCode.C
+			or io.KeyCode == Enum.KeyCode.ButtonX
+			or io.KeyCode == Enum.KeyCode.ButtonB
+		then
+			self.state.rollPressed = true
 		elseif io.KeyCode == Enum.KeyCode.R or io.KeyCode == Enum.KeyCode.ButtonSelect then
 			self.respawnRequested = true
 		end
@@ -1214,6 +1432,227 @@ function InputState:Update()
 end
 
 return InputState
+]=====])
+script(f, 'ModuleScript', 'LockOn', [=====[-- Lock-on and enemy contact for the local player.
+-- Every frame while airborne it picks the best enemy ahead of you (in range,
+-- inside a cone around your heading, in line of sight) and puts a reticle on it.
+-- Pressing jump then homes in (see Controller:StartHoming).
+-- It also handles touching enemies: if you're attacking (curled up, rolling,
+-- boosting, stomping, homing) the enemy is defeated, otherwise you get hurt.
+--
+-- Enemies are any BasePart tagged "HomingTarget" (EnemyService tags each enemy's core).
+
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+local Config = require(script.Parent.Config)
+
+local TAG = "HomingTarget"
+
+local LockOn = {}
+LockOn.__index = LockOn
+
+local function flatten(v: Vector3): Vector3
+	return Vector3.new(v.X, 0, v.Z)
+end
+
+local function makeReticle(playerGui: PlayerGui)
+	local gui = Instance.new("BillboardGui")
+	gui.Name = "MomentumLockOn"
+	gui.Size = UDim2.fromOffset(84, 84)
+	gui.AlwaysOnTop = true
+	gui.LightInfluence = 0
+	gui.ResetOnSpawn = false
+	gui.Enabled = false
+
+	local spinner = Instance.new("Frame")
+	spinner.Name = "Spinner"
+	spinner.AnchorPoint = Vector2.new(0.5, 0.5)
+	spinner.Position = UDim2.fromScale(0.5, 0.5)
+	spinner.Size = UDim2.fromScale(1, 1)
+	spinner.BackgroundTransparency = 1
+	spinner.Parent = gui
+
+	local ring = Instance.new("Frame")
+	ring.AnchorPoint = Vector2.new(0.5, 0.5)
+	ring.Position = UDim2.fromScale(0.5, 0.5)
+	ring.Size = UDim2.fromScale(0.72, 0.72)
+	ring.BackgroundTransparency = 1
+	ring.Parent = spinner
+	Instance.new("UICorner", ring).CornerRadius = UDim.new(1, 0)
+	local stroke = Instance.new("UIStroke", ring)
+	stroke.Color = Color3.fromRGB(255, 70, 40)
+	stroke.Thickness = 3
+
+	-- Four ticks pointing in at the target
+	for i = 0, 3 do
+		local tick = Instance.new("Frame")
+		tick.AnchorPoint = Vector2.new(0.5, 0.5)
+		tick.Size = UDim2.fromOffset(4, 16)
+		tick.BackgroundColor3 = Color3.fromRGB(255, 220, 120)
+		tick.BorderSizePixel = 0
+		local a = i * math.pi / 2
+		tick.Position = UDim2.fromScale(0.5 + 0.47 * math.sin(a), 0.5 - 0.47 * math.cos(a))
+		tick.Rotation = math.deg(a)
+		tick.Parent = spinner
+	end
+
+	gui.Parent = playerGui
+	return gui, spinner
+end
+
+function LockOn.new(ctrl, playerGui: PlayerGui)
+	local self = setmetatable({}, LockOn)
+	self.ctrl = ctrl
+	self.gui, self.spinner = makeReticle(playerGui)
+	self.defeated = {} -- parts we've defeated locally, waiting for the server to remove them
+	self.lockedPart = nil
+	self.t = 0
+
+	ctrl.onEnemyHit = function(part)
+		self:Defeat(part)
+	end
+	return self
+end
+
+function LockOn:IsAlive(part: BasePart): boolean
+	return part:IsDescendantOf(Workspace) and not part:GetAttribute("Defeated") and not self.defeated[part]
+end
+
+function LockOn:FindTarget(): BasePart?
+	local ctrl = self.ctrl
+	local pos = ctrl.position
+	local heading = flatten(ctrl.velocity)
+	if heading.Magnitude < 5 then
+		heading = flatten(ctrl.facing)
+	end
+	heading = if heading.Magnitude > 1e-3 then heading.Unit else Vector3.xAxis
+
+	local best, bestScore = nil, math.huge
+	for _, part in CollectionService:GetTagged(TAG) do
+		if part:IsA("BasePart") and self:IsAlive(part) then
+			local to = part.Position - pos
+			local dist = to.Magnitude
+			if dist > 1 and dist <= Config.HomingRange then
+				local flat = flatten(to)
+				-- Straight below you counts as "ahead"
+				local dot = if flat.Magnitude > 2 then flat.Unit:Dot(heading) else 1
+				if dot >= Config.HomingConeDot then
+					local hit = Workspace:Raycast(pos, to, ctrl.rayParams)
+					if not hit or hit.Distance >= dist - 3 then
+						local score = dist * (1.6 - dot)
+						if score < bestScore then
+							best, bestScore = part, score
+						end
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
+-- Called every frame after the controller has moved.
+function LockOn:Update(dt: number)
+	local ctrl = self.ctrl
+	self.t += dt
+
+	-- Contact with enemies
+	for _, part in CollectionService:GetTagged(TAG) do
+		if part:IsA("BasePart") and self:IsAlive(part) then
+			local reach = Config.EnemyContactRadius + part.Size.X / 2
+			if (part.Position - ctrl.position).Magnitude <= reach then
+				if ctrl:IsAttacking() then
+					self:Defeat(part)
+					ctrl:BounceOff()
+				else
+					ctrl:Hurt(part.Position)
+				end
+			end
+		end
+	end
+
+	-- Lock-on (airborne only; keep the current target while homing)
+	local target = nil
+	if ctrl.homingTarget then
+		target = ctrl.homingTarget
+	elseif not ctrl.grounded then
+		target = self:FindTarget()
+	end
+	ctrl.lockTarget = if ctrl.homingTarget then nil else target
+
+	if target ~= self.lockedPart then
+		self.lockedPart = target
+		self.gui.Adornee = target
+		if target then
+			-- Snap-in: start big and shrink onto the target
+			self.spinner.Size = UDim2.fromScale(1.8, 1.8)
+			TweenService:Create(self.spinner, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
+				Size = UDim2.fromScale(1, 1),
+			}):Play()
+		end
+	end
+	self.gui.Enabled = target ~= nil
+	self.spinner.Rotation = (self.t * 180) % 360
+end
+
+local function burst(position: Vector3)
+	local ball = Instance.new("Part")
+	ball.Shape = Enum.PartType.Ball
+	ball.Material = Enum.Material.Neon
+	ball.Color = Color3.fromRGB(255, 140, 40)
+	ball.Size = Vector3.one * 2
+	ball.Position = position
+	ball.Anchored = true
+	ball.CanCollide = false
+	ball.CanQuery = false
+	ball.CanTouch = false
+	ball.CastShadow = false
+	ball.Parent = Workspace
+	local tween = TweenService:Create(ball, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Size = Vector3.one * 12,
+		Transparency = 1,
+	})
+	tween:Play()
+	tween.Completed:Once(function()
+		ball:Destroy()
+	end)
+end
+
+function LockOn:Defeat(part: BasePart)
+	if self.defeated[part] then
+		return
+	end
+	self.defeated[part] = true
+	burst(part.Position)
+
+	-- Hide it right away on our screen; the server confirms and respawns it later.
+	local model = part:FindFirstAncestorWhichIsA("Model") or part
+	local remotes = ReplicatedStorage:FindFirstChild("MomentumRemotes")
+	local remote = remotes and remotes:FindFirstChild("DefeatEnemy")
+	if remote then
+		remote:FireServer(part)
+	end
+	local parent = model.Parent
+	model.Parent = nil
+	task.delay(3, function()
+		self.defeated[part] = nil
+		-- If the server never confirmed (say we were too far away), put it back.
+		if model.Parent == nil and not part:GetAttribute("Defeated") and parent and parent.Parent then
+			model.Parent = parent
+		end
+	end)
+end
+
+function LockOn:Destroy()
+	self.ctrl.onEnemyHit = nil
+	self.ctrl.lockTarget = nil
+	self.gui:Destroy()
+end
+
+return LockOn
 ]=====])
 script(f, 'ModuleScript', 'RunCycle', [=====[-- Procedural, speed-driven run cycle for R15 characters.
 -- Instead of playing a fixed animation, every frame this poses the joints
@@ -1408,9 +1847,192 @@ script(f, 'Script', 'BuildTestLevel', [=====[-- Builds the test level when the s
 -- (for example because you generated it in Edit mode to look at or tweak).
 require(script.Parent:WaitForChild("LevelBuilder")).Build()
 ]=====])
+script(f, 'Script', 'EnemyService', [=====[-- Spawns enemies ("Cinder Imps": floating horned embers) at every part named
+-- "EnemySpawn" in the level, bobs and patrols them, and handles defeats.
+-- Each imp's "Core" part is tagged "HomingTarget", which is what the client's
+-- lock-on looks for. Defeated imps respawn after a few seconds.
+--
+-- EnemySpawn attributes (all optional):
+--   Patrol (Vector3): the imp drifts back and forth by this offset
+--   PatrolSpeed (number): radians per second of the patrol swing
+
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local ServerStorage = game:GetService("ServerStorage")
+local Workspace = game:GetService("Workspace")
+
+local TAG = "HomingTarget"
+local RESPAWN_SECONDS = 8
+local MAX_HIT_DISTANCE = 45 -- generous, to allow for network lag at high speed
+
+local remotes = ReplicatedStorage:FindFirstChild("MomentumRemotes")
+if not remotes then
+	remotes = Instance.new("Folder")
+	remotes.Name = "MomentumRemotes"
+	remotes.Parent = ReplicatedStorage
+end
+local defeatRemote = remotes:FindFirstChild("DefeatEnemy") or Instance.new("RemoteEvent")
+defeatRemote.Name = "DefeatEnemy"
+defeatRemote.Parent = remotes
+
+local folder = Instance.new("Folder")
+folder.Name = "Enemies"
+folder.Parent = Workspace
+
+local function piece(model: Model, props): Part
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false -- the controller's ray and sphere casts ignore enemies
+	p.CanTouch = false
+	p.CastShadow = false
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	for k, v in props do
+		p[k] = v
+	end
+	p.Parent = model
+	return p
+end
+
+local function buildImp(): Model
+	local model = Instance.new("Model")
+	model.Name = "CinderImp"
+
+	local core = piece(model, {
+		Name = "Core",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.one * 3.6,
+		Material = Enum.Material.Basalt,
+		Color = Color3.fromRGB(60, 24, 20),
+	})
+	model.PrimaryPart = core
+	local cf = core.CFrame
+
+	-- Molten eye, horns, little bat wings
+	piece(model, {
+		Name = "Eye",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.one * 1.5,
+		Material = Enum.Material.Neon,
+		Color = Color3.fromRGB(255, 150, 40),
+		CFrame = cf * CFrame.new(0, 0.3, -1.25),
+	})
+	for _, side in { -1, 1 } do
+		piece(model, {
+			Name = "Horn",
+			Size = Vector3.new(0.5, 1.6, 0.5),
+			Material = Enum.Material.Neon,
+			Color = Color3.fromRGB(200, 40, 20),
+			CFrame = cf * CFrame.new(0.9 * side, 1.7, 0) * CFrame.Angles(0, 0, -0.45 * side),
+		})
+		piece(model, {
+			Name = "Wing",
+			Size = Vector3.new(2.6, 0.2, 1.5),
+			Material = Enum.Material.Slate,
+			Color = Color3.fromRGB(90, 20, 20),
+			CFrame = cf * CFrame.new(2.4 * side, 0.4, 0.4) * CFrame.Angles(0, 0, 0.35 * side),
+		})
+	end
+
+	local light = Instance.new("PointLight")
+	light.Color = Color3.fromRGB(255, 110, 40)
+	light.Range = 10
+	light.Brightness = 1.5
+	light.Parent = core
+
+	CollectionService:AddTag(core, TAG)
+	return model
+end
+
+local enemies = {} -- [core] = enemy record
+
+local function spawnAt(marker: BasePart)
+	local model = buildImp()
+	local enemy = {
+		model = model,
+		core = model.PrimaryPart,
+		origin = marker.Position,
+		patrol = marker:GetAttribute("Patrol") or Vector3.zero,
+		patrolSpeed = marker:GetAttribute("PatrolSpeed") or 1,
+		seed = math.random() * 10,
+		alive = true,
+	}
+	model:PivotTo(CFrame.new(enemy.origin))
+	model.Parent = folder
+	enemies[enemy.core] = enemy
+end
+
+local function spawnAll()
+	local level = Workspace:WaitForChild("HellTestLevel", 30)
+	if not level then
+		warn("[Momentum] no HellTestLevel found; no enemies spawned")
+		return
+	end
+	for _, d in level:GetDescendants() do
+		if d:IsA("BasePart") and d.Name == "EnemySpawn" then
+			spawnAt(d)
+		end
+	end
+end
+
+defeatRemote.OnServerEvent:Connect(function(player: Player, core)
+	if typeof(core) ~= "Instance" then
+		return
+	end
+	local enemy = enemies[core]
+	if not enemy or not enemy.alive then
+		return
+	end
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root or (root.Position - core.Position).Magnitude > MAX_HIT_DISTANCE then
+		return
+	end
+
+	enemy.alive = false
+	core:SetAttribute("Defeated", true)
+	enemy.model.Parent = ServerStorage
+	task.delay(RESPAWN_SECONDS, function()
+		core:SetAttribute("Defeated", false)
+		enemy.alive = true
+		enemy.model.Parent = folder
+	end)
+end)
+
+-- Hover, bob and patrol
+RunService.Heartbeat:Connect(function()
+	local t = os.clock()
+	for _, enemy in enemies do
+		if enemy.alive then
+			local swing = math.sin(t * enemy.patrolSpeed + enemy.seed)
+			local bob = math.sin(t * 2.3 + enemy.seed) * 0.6
+			local pos = enemy.origin + enemy.patrol * swing + Vector3.new(0, bob, 0)
+			-- Face along the patrol (or slowly spin if it doesn't patrol)
+			local heading
+			if enemy.patrol.Magnitude > 0.1 then
+				local vel = enemy.patrol * math.cos(t * enemy.patrolSpeed + enemy.seed)
+				heading = if vel.Magnitude > 0.05 then vel.Unit else enemy.patrol.Unit
+			else
+				local a = t * 0.8 + enemy.seed
+				heading = Vector3.new(math.sin(a), 0, math.cos(a))
+			end
+			local flat = Vector3.new(heading.X, 0, heading.Z)
+			if flat.Magnitude < 0.05 then
+				flat = Vector3.zAxis
+			end
+			enemy.model:PivotTo(CFrame.lookAt(pos, pos + flat))
+		end
+	end
+end)
+
+spawnAll()
+]=====])
 script(f, 'ModuleScript', 'LevelBuilder', [=====[-- Procedurally builds "Circle 0: The Test Pit", a small course for the momentum
 -- controller: a starting drop, a hill, a loop, a launch ramp, a long wall-run
--- quarter pipe on the left, and a big quarter pipe at the end.
+-- quarter pipe on the left, and a big quarter pipe at the end. It also places
+-- invisible "EnemySpawn" markers that EnemyService fills with enemies.
 -- The level floats over a lava sea; falling in respawns you.
 
 local Lighting = game:GetService("Lighting")
@@ -1520,6 +2142,27 @@ local function strip(parent: Instance, from: Vector3, to: Vector3, width: number
 		CanQuery = false,
 		CanTouch = false,
 	})
+end
+
+-- Invisible marker; EnemyService spawns an enemy here. Move these around in Studio.
+local function enemySpawn(parent: Instance, position: Vector3, patrol: Vector3?, patrolSpeed: number?)
+	local marker = newPart(parent, {
+		Name = "EnemySpawn",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.one * 2,
+		Position = position,
+		Transparency = 1,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	if patrol then
+		marker:SetAttribute("Patrol", patrol)
+	end
+	if patrolSpeed then
+		marker:SetAttribute("PatrolSpeed", patrolSpeed)
+	end
+	return marker
 end
 
 local function buildLoop(parent: Instance, cx: number, radius: number, zStart: number, zEnd: number)
@@ -1697,6 +2340,28 @@ function LevelBuilder.Build(): Folder
 		strip(level, W(150, 0, -45), W(700, 0, -45), 1)
 	end
 
+	-- 7. Enemies
+	do
+		local spawns = Instance.new("Folder")
+		spawns.Name = "EnemySpawns"
+		spawns.Parent = level
+		-- Ground imps after the drop: roll, boost or jump through them, don't just run in
+		enemySpawn(spawns, W(160, 4, -6), Vector3.new(0, 0, 6), 1.2)
+		enemySpawn(spawns, W(178, 4, 6), Vector3.new(0, 0, -6), 1.2)
+		-- One hovering over the hill top: jump and home in
+		enemySpawn(spawns, W(280, 32, 0))
+		-- Homing chain off the launch ramp: home, bounce, home, bounce...
+		enemySpawn(spawns, W(625, 30, 16))
+		enemySpawn(spawns, W(660, 38, 16))
+		enemySpawn(spawns, W(695, 32, 16))
+		-- Guards in front of the quarter pipe
+		enemySpawn(spawns, W(735, 4, 0), Vector3.new(0, 0, 14), 0.8)
+		-- Along the wall run, for homing off the wall
+		enemySpawn(spawns, W(420, 34, -78), Vector3.new(20, 0, 0), 0.6)
+		enemySpawn(spawns, W(540, 40, -78), Vector3.new(20, 0, 0), 0.6)
+		sign(level, W(625, 44, 16), "HOMING CHAIN: jump off the ramp, tap jump on each imp")
+	end
+
 	setupLighting()
 
 	-- Turn off any other spawns (like the Baseplate template's) so you start here.
@@ -1774,6 +2439,7 @@ local ChaseCamera = require(Momentum:WaitForChild("ChaseCamera"))
 local Hud = require(Momentum:WaitForChild("Hud"))
 local CharacterFx = require(Momentum:WaitForChild("CharacterFx"))
 local InputState = require(Momentum:WaitForChild("InputState"))
+local LockOn = require(Momentum:WaitForChild("LockOn"))
 
 local player = Players.LocalPlayer
 
@@ -1802,6 +2468,7 @@ local active = nil
 local function stop()
 	if active then
 		active.fx:Destroy()
+		active.lockOn:Destroy()
 		active = nil
 	end
 end
@@ -1832,7 +2499,11 @@ local function onCharacter(character: Model)
 
 	disableDefaultControls()
 	for _, state in Enum.HumanoidStateType:GetEnumItems() do
-		if state ~= Enum.HumanoidStateType.Physics and state ~= Enum.HumanoidStateType.Dead then
+		if
+			state ~= Enum.HumanoidStateType.Physics
+			and state ~= Enum.HumanoidStateType.Dead
+			and state ~= Enum.HumanoidStateType.None
+		then
 			pcall(humanoid.SetStateEnabled, humanoid, state, false)
 		end
 	end
@@ -1849,7 +2520,9 @@ local function onCharacter(character: Model)
 	ctrl:AddIgnore(fx.ball)
 	camera:Attach(ctrl, { character, fx.ball })
 
-	active = { ctrl = ctrl, fx = fx, character = character }
+	local lockOn = LockOn.new(ctrl, player:WaitForChild("PlayerGui"))
+
+	active = { ctrl = ctrl, fx = fx, lockOn = lockOn, character = character }
 	humanoid.Died:Connect(function()
 		if active and active.character == character then
 			stop()
@@ -1877,6 +2550,7 @@ preSimulation:Connect(function(a, b)
 	end
 	local cam = Workspace.CurrentCamera
 	ctrl:Step(dt, if cam then cam.CFrame else CFrame.new())
+	active.lockOn:Update(dt)
 	ctrl:Apply()
 	active.fx:UpdatePose(dt)
 end)

@@ -13,7 +13,15 @@ local Config = {
 	SlopeFactor = 0.55, -- share of gravity that pushes you along slopes
 	TurnRateSlow = 9, -- radians/sec when standing still
 	TurnRateFast = 1.4, -- radians/sec at top speed and above
-	AirAccel = 45,
+
+	-- Air movement
+	AirAccel = 45, -- speeding up in the air (only up to TopSpeed)
+	AirTurnRate = 2.2, -- radians/sec you can bend your flight path
+	AirBrake = 70, -- slowdown when holding against your direction in the air
+	AirDrag = 4, -- slowdown above TopSpeed while airborne (not while boosting)
+	AirDashSpeed = 110, -- jump again in the air with no target locked
+	AirDashLift = 8,
+	StompSpeed = 170, -- roll button in the air slams you down
 
 	-- Jump
 	JumpPower = 55, -- launched along the surface normal
@@ -71,6 +79,18 @@ local Config = {
 	FovBase = 70,
 	FovMax = 95,
 	FovBoostKick = 8,
+
+	-- Homing attack and enemies
+	HomingRange = 75, -- how far away an enemy can be locked onto
+	HomingConeDot = 0.2, -- how far off your heading it can be (cosine of the angle)
+	HomingSpeed = 190,
+	HomingHitRadius = 4.5,
+	HomingMaxTime = 1.0, -- give up if the target hasn't been reached by then
+	HomingBounce = 55, -- upward pop after a hit, so you can chain to the next one
+	EnemyContactRadius = 2.6, -- added to the enemy's own radius
+	EnemyKnockback = 45,
+	EnemyHeatLoss = 0.25, -- heat lost when an enemy hits you
+	HurtInvulnerability = 1.2, -- seconds you can't be hit again
 
 	-- Procedural run cycle (R15)
 	RunCycleWalkSpeed = 20, -- full walk stride by this speed
