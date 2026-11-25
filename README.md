@@ -15,7 +15,9 @@ A custom momentum character controller for Roblox, plus a test level.
 | `src/shared/Momentum/InputState.luau` | Keyboard and gamepad input. |
 | `src/shared/Momentum/LockOn.luau` | Picks the enemy to lock onto in the air, draws the reticle, handles touching enemies (defeat or get hurt). |
 | `src/server/EnemyService.server.luau` | Spawns Cinder Imps at every `EnemySpawn` marker, makes them hover and patrol, confirms defeats and respawns them. |
+| `src/shared/Momentum/AshFx.luau` | Ash's live effects: cracks that brighten with speed, the streaming scarf tail, sneaker flames. |
 | `src/client/MomentumClient.client.luau` | Starts everything for the local player. |
+| `src/server/AshBuilder.luau` + `AshCharacter.server.luau` | Builds Ash, the main character, and makes him everyone's `StarterCharacter`. |
 | `src/server/PlayerSetup.server.luau` | Collision group for characters, turns off shift-lock (Shift is boost). |
 | `src/server/LevelBuilder.luau` + `BuildTestLevel.server.luau` | Builds the test level on server start (skips it if `Workspace.HellTestLevel` already exists). |
 | `InstallInStudio.luau` | One-paste installer for the Studio Command Bar (no Rojo needed). |
@@ -133,6 +135,23 @@ Running and sprinting are cartoon-exaggerated by `RunCycleExaggeration` (1.5): b
 (forward swing larger than the back swing), wider arm pumps, arms swept further back at sprint, a deeper lean,
 a bigger bounce on each footfall and a side-to-side hip rock. Walking stays natural. Set it to 1 for the
 realistic gait, or around 2 for very rubbery legs.
+
+## Ash, the main character
+
+Everyone plays as Ash. `AshBuilder` builds him on server start out of plain parts (chunky low-poly, no uploaded
+assets) and installs him as `StarterPlayer.StarterCharacter`:
+
+- Slim charcoal-gray runner build on a standard R15 rig, so the run cycle, spin-ball and afterimages all work on him.
+- Glowing orange cracks over his body. They smoulder and pulse at rest and blaze brighter as he speeds up (full at 150).
+- Blank glowing white eyes and swept-back ash spikes with ember tips.
+- A tattered red scarf. The knot is part of the body; the tail is a small rope simulation that hangs at rest and
+  streams and whips behind him at speed, splitting into two ragged ends.
+- Flame-wrapped sneakers: dark shoes with white toe caps, a glowing sole, flame shapes up the sides and real flames
+  off the heels that grow with speed.
+
+Tune the glow and scarf with the `Ash*` values in `Config.luau`. To change his shape or colors, edit `AshBuilder.luau`.
+The scarf tail, crack brightening and bigger flames are drawn on your own screen only. Other players see his
+body, knot, cracks and steady heel flames.
 
 ## Afterimages
 

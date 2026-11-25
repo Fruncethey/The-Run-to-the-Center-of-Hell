@@ -9,6 +9,235 @@ local function script(folder, class, name, source)
   local s = Instance.new(class); s.Name = name; s.Source = source; s.Parent = folder; return s
 end
 do local f = put(game:GetService('ReplicatedStorage'), 'Momentum')
+script(f, 'ModuleScript', 'AshFx', [=====[-- Ash's local effects, driven by CharacterFx every frame:
+--   * his cracks smoulder when slow and blaze brighter the faster he goes
+--   * the tattered red scarf tail streams and flutters behind him (a little rope sim)
+--   * his sneaker flames grow with speed
+-- The scarf knot, cracks and flame emitters themselves are built by AshBuilder on the server.
+
+local Workspace = game:GetService("Workspace")
+
+local Config = require(script.Parent.Config)
+
+local AshFx = {}
+AshFx.__index = AshFx
+
+local SCARF = Color3.fromRGB(165, 24, 22)
+local SCARF_DARK = Color3.fromRGB(120, 14, 14)
+local CRACK_DIM = Color3.fromRGB(120, 32, 8)
+local CRACK_HOT = Color3.fromRGB(255, 175, 70)
+
+local function scarfPart(width: number, color: Color3): Part
+	local p = Instance.new("Part")
+	p.Name = "AshScarfTail"
+	p.Size = Vector3.new(width, 0.06, 0.5)
+	p.Color = color
+	p.Material = Enum.Material.SmoothPlastic
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	return p
+end
+
+function AshFx.Is(character: Model): boolean
+	return character:GetAttribute("AshCharacter") == true
+end
+
+function AshFx.new(character: Model, ctrl)
+	local self = setmetatable({}, AshFx)
+	self.ctrl = ctrl
+	self.time = 0
+	self.glow = 0
+
+	self.cracks = {}
+	self.flames = {}
+	for _, d in character:GetDescendants() do
+		if d:IsA("BasePart") and d.Name == "AshCrack" then
+			table.insert(self.cracks, d)
+		elseif d:IsA("ParticleEmitter") and d.Parent and d.Parent.Name == "AshFlame" then
+			table.insert(self.flames, d)
+		end
+	end
+	self.knot = character:FindFirstChild("AshScarfKnot", true)
+	self.torso = character:FindFirstChild("UpperTorso")
+
+	-- Scarf tail: a chain of points hanging off the back of the knot, drawn as flat strips.
+	-- The last strip splits in two for a tattered end.
+	local folder = Instance.new("Folder")
+	folder.Name = "AshScarf"
+	folder.Parent = Workspace
+	self.folder = folder
+	local n = Config.AshScarfSegments
+	self.points, self.prev, self.strips = {}, {}, {}
+	for i = 1, n do
+		local width = 0.5 - 0.2 * (i - 1) / math.max(1, n - 1)
+		local color = if i % 2 == 0 then SCARF_DARK else SCARF
+		if i < n then
+			self.strips[i] = { scarfPart(width, color) }
+		else
+			self.strips[i] = { scarfPart(width * 0.45, SCARF), scarfPart(width * 0.45, SCARF_DARK) }
+		end
+		for _, p in self.strips[i] do
+			p.Parent = folder
+		end
+	end
+	self:ResetScarf()
+	return self
+end
+
+function AshFx:Anchor(): (Vector3?, CFrame?)
+	local knot = self.knot
+	if not (knot and knot.Parent and self.torso) then
+		return nil, nil
+	end
+	local cf = knot.CFrame
+	return (cf * CFrame.new(0, -0.05, knot.Size.Z / 2)).Position, self.torso.CFrame
+end
+
+-- Lay the scarf straight down the back (used at spawn and after a respawn teleport)
+function AshFx:ResetScarf()
+	local anchor, torso = self:Anchor()
+	if not anchor then
+		return
+	end
+	local down = -torso.UpVector * 0.7 + torso.LookVector * -0.3
+	for i = 1, Config.AshScarfSegments do
+		local p = anchor + down.Unit * Config.AshScarfSegmentLength * i
+		self.points[i] = p
+		self.prev[i] = p
+	end
+	self.lastAnchor = anchor
+end
+
+function AshFx:UpdateScarf(dt: number, speed: number, hidden: boolean)
+	local anchor, torso = self:Anchor()
+	if not anchor then
+		return
+	end
+	if hidden then
+		for _, strip in self.strips do
+			for _, p in strip do
+				p.Transparency = 1
+			end
+		end
+		self:ResetScarf()
+		return
+	end
+	if not self.lastAnchor or (anchor - self.lastAnchor).Magnitude > 40 then
+		self:ResetScarf()
+	end
+	self.lastAnchor = anchor
+
+	local C = Config
+	local n, len = C.AshScarfSegments, C.AshScarfSegmentLength
+	dt = math.min(dt, 1 / 30)
+	local damp = math.exp(-C.AshScarfDrag * dt)
+	local back = -torso.LookVector
+	local right = torso.RightVector
+	local up = torso.UpVector
+	local flap = math.clamp(speed / 120, 0, 1.5)
+
+	-- Verlet: keep momentum (minus air drag), fall, and flutter more the faster you go
+	for i = 1, n do
+		local p = self.points[i]
+		local v = (p - self.prev[i]) * damp
+		self.prev[i] = p
+		local wave = self.time * (8 + 10 * flap) - i * 0.9
+		local flutter = (right * math.sin(wave) * 0.6 + up * math.cos(wave * 1.3) * 0.8) * C.AshScarfFlutter * flap * (i / n)
+		self.points[i] = p + v + (Vector3.new(0, -C.Gravity * 0.35, 0) + flutter) * dt * dt
+	end
+	-- Keep each link its length (anchor fixed) and keep the tail behind the body
+	for _ = 1, 3 do
+		local last = anchor
+		for i = 1, n do
+			local p = self.points[i]
+			local rel = p - anchor
+			local depth = rel:Dot(back)
+			if depth < 0.15 then
+				p += back * (0.15 - depth)
+			end
+			local d = p - last
+			if d.Magnitude > 1e-4 then
+				p = last + d.Unit * len
+			else
+				p = last + back * len
+			end
+			self.points[i] = p
+			last = p
+		end
+	end
+
+	-- Draw the strips
+	local last = anchor
+	for i = 1, n do
+		local p = self.points[i]
+		local seg = p - last
+		local mid = (p + last) / 2
+		local look = if seg.Magnitude > 1e-4 then seg.Unit else back
+		local side = look:Cross(up)
+		if side.Magnitude < 0.1 then
+			side = look:Cross(back)
+		end
+		side = side.Unit
+		local normal = side:Cross(look)
+		local strips = self.strips[i]
+		if #strips == 1 then
+			local s = strips[1]
+			s.Size = Vector3.new(s.Size.X, s.Size.Y, len + 0.08)
+			s.CFrame = CFrame.fromMatrix(mid, side, normal, -look)
+			s.Transparency = 0
+		else
+			-- Tattered end: two ragged strips of different lengths, splayed apart
+			for k, s in strips do
+				local sign = if k == 1 then -1 else 1
+				local l = len * (if k == 1 then 1.1 else 0.75)
+				local off = side * sign * s.Size.X * 0.7
+				local dir = (look + side * sign * 0.25).Unit
+				local center = last + off + dir * l / 2
+				local sSide = dir:Cross(normal).Unit
+				s.Size = Vector3.new(s.Size.X, s.Size.Y, l)
+				s.CFrame = CFrame.fromMatrix(center, sSide, normal, -dir)
+				s.Transparency = 0
+			end
+		end
+		last = p
+	end
+end
+
+function AshFx:Update(dt: number, speed: number, hidden: boolean)
+	local C = Config
+	self.time += dt
+	-- Cracks: smoulder and slowly pulse at rest, blaze at speed
+	local target = math.clamp(speed / C.AshGlowFullSpeed, 0, 1)
+	self.glow += (target - self.glow) * (1 - math.exp(-6 * dt))
+	local pulse = 0.12 * (0.5 + 0.5 * math.sin(self.time * 3))
+	local heat = math.clamp(self.glow + pulse * (1 - self.glow), 0, 1)
+	local color = CRACK_DIM:Lerp(CRACK_HOT, heat)
+	for _, crack in self.cracks do
+		crack.Color = color
+	end
+
+	-- Sneaker flames grow with speed
+	for _, fire in self.flames do
+		fire.Enabled = not hidden
+		fire.Rate = 10 + 70 * self.glow
+		fire.Size = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.45 + 0.5 * self.glow),
+			NumberSequenceKeypoint.new(1, 0),
+		})
+	end
+
+	self:UpdateScarf(dt, speed, hidden)
+end
+
+function AshFx:Destroy()
+	self.folder:Destroy()
+end
+
+return AshFx
+]=====])
 script(f, 'ModuleScript', 'CharacterFx', [=====[-- Visuals for the local character: a speed-driven procedural run cycle (R15;
 -- R6 falls back to the default run/idle/fall animations), a molten spin-ball while jumping, rolling or charging, and a fire trail
 -- plus glow while boosting, and glowing afterimages at very high speed.
@@ -18,6 +247,7 @@ local Workspace = game:GetService("Workspace")
 
 local Config = require(script.Parent.Config)
 local RunCycle = require(script.Parent.RunCycle)
+local AshFx = require(script.Parent.AshFx)
 
 local CharacterFx = {}
 CharacterFx.__index = CharacterFx
@@ -136,6 +366,10 @@ function CharacterFx.new(character: Model, humanoid: Humanoid, root: BasePart, c
 	self.ghostFolder = ghostFolder
 	self.ghosts = {}
 	self.ghostTimer = 0
+
+	if AshFx.Is(character) then
+		self.ash = AshFx.new(character, ctrl)
+	end
 
 	return self
 end
@@ -318,6 +552,9 @@ function CharacterFx:Update(dt: number)
 	end
 
 	self:UpdateGhosts(dt, speed)
+	if self.ash then
+		self.ash:Update(dt, speed, self.hidden)
+	end
 
 	self.trail.Enabled = ctrl.boosting
 	self.light.Brightness = ctrl.heat * 1.5 + (if ctrl.boosting then 2.5 else 0)
@@ -334,6 +571,9 @@ function CharacterFx:Destroy()
 	end
 	self.ball:Destroy()
 	self.ghostFolder:Destroy()
+	if self.ash then
+		self.ash:Destroy()
+	end
 	self.trail:Destroy()
 	self.light:Destroy()
 end
@@ -580,6 +820,13 @@ local Config = {
 	AfterimageInterval = 0.05, -- seconds between ghosts
 	AfterimageLifetime = 0.3, -- seconds each ghost takes to fade out
 	AfterimageStartTransparency = 0.45, -- how solid a fresh ghost is at full strength
+
+	-- Ash (the main character)
+	AshGlowFullSpeed = 150, -- his cracks and sneaker flames are at full blaze by this speed
+	AshScarfSegments = 7, -- links in the scarf tail
+	AshScarfSegmentLength = 0.5,
+	AshScarfDrag = 3, -- air drag on the scarf; higher streams it straighter behind
+	AshScarfFlutter = 40, -- how hard the tail whips about at speed
 
 	CollisionGroup = "MomentumPlayer",
 }
@@ -1995,6 +2242,290 @@ return RunCycle
 ]=====])
 end
 do local f = put(game:GetService('ServerScriptService'), 'MomentumServer')
+script(f, 'ModuleScript', 'AshBuilder', [=====[-- Builds Ash, the playable main character, as a chunky low-poly R15 rig made of
+-- plain parts: a slim charcoal runner with glowing orange cracks, blank glowing
+-- white eyes, swept-back ash spikes for hair, a tattered red scarf (the knot is
+-- here; the streaming tail is drawn by AshFx on the client) and flame-wrapped sneakers.
+--
+-- The rig uses the standard R15 part and joint names, so the procedural run
+-- cycle, spin-ball and afterimages work on it unchanged.
+--
+-- Decoration parts are named so the client can find them:
+--   AshCrack      glowing crack strips (brightened with speed by AshFx)
+--   AshScarfKnot  the scarf around the neck (the tail hangs off its back)
+--   AshFlame      attachments on the sneakers holding the flame emitters
+
+local AshBuilder = {}
+
+local CHARCOAL = Color3.fromRGB(44, 42, 46)
+local CHARCOAL_DARK = Color3.fromRGB(28, 26, 29)
+local EMBER = Color3.fromRGB(255, 120, 30)
+local EYE = Color3.fromRGB(255, 250, 235)
+local SCARF = Color3.fromRGB(165, 24, 22)
+
+-- Body layout, in studs, with the HumanoidRootPart's center at the origin.
+-- Feet touch the ground at Y = -3.4, so HipHeight is 2.4.
+local GROUND_Y = -3.4
+local BODY = {
+	-- name = { size, center }
+	HumanoidRootPart = { Vector3.new(2, 2, 1), Vector3.new(0, 0, 0) },
+	LowerTorso = { Vector3.new(1.3, 0.45, 0.72), Vector3.new(0, -0.6, 0) },
+	UpperTorso = { Vector3.new(1.55, 1.3, 0.78), Vector3.new(0, 0.275, 0) },
+	Head = { Vector3.new(1.15, 1.1, 1.1), Vector3.new(0, 1.5, 0) },
+	LeftUpperArm = { Vector3.new(0.42, 1.0, 0.42), Vector3.new(-0.99, 0.3, 0) },
+	LeftLowerArm = { Vector3.new(0.38, 0.95, 0.38), Vector3.new(-0.99, -0.675, 0) },
+	LeftHand = { Vector3.new(0.42, 0.35, 0.42), Vector3.new(-0.99, -1.325, 0) },
+	RightUpperArm = { Vector3.new(0.42, 1.0, 0.42), Vector3.new(0.99, 0.3, 0) },
+	RightLowerArm = { Vector3.new(0.38, 0.95, 0.38), Vector3.new(0.99, -0.675, 0) },
+	RightHand = { Vector3.new(0.42, 0.35, 0.42), Vector3.new(0.99, -1.325, 0) },
+	LeftUpperLeg = { Vector3.new(0.52, 1.15, 0.52), Vector3.new(-0.38, -1.375, 0) },
+	LeftLowerLeg = { Vector3.new(0.46, 1.1, 0.46), Vector3.new(-0.38, -2.5, 0) },
+	LeftFoot = { Vector3.new(0.58, 0.35, 1.0), Vector3.new(-0.38, -3.225, -0.15) },
+	RightUpperLeg = { Vector3.new(0.52, 1.15, 0.52), Vector3.new(0.38, -1.375, 0) },
+	RightLowerLeg = { Vector3.new(0.46, 1.1, 0.46), Vector3.new(0.38, -2.5, 0) },
+	RightFoot = { Vector3.new(0.58, 0.35, 1.0), Vector3.new(0.38, -3.225, -0.15) },
+}
+
+-- Joints: name = { parent part, child part, joint position }
+local JOINTS = {
+	Root = { "HumanoidRootPart", "LowerTorso", Vector3.new(0, -0.6, 0) },
+	Waist = { "LowerTorso", "UpperTorso", Vector3.new(0, -0.375, 0) },
+	Neck = { "UpperTorso", "Head", Vector3.new(0, 0.95, 0) },
+	LeftShoulder = { "UpperTorso", "LeftUpperArm", Vector3.new(-0.99, 0.75, 0) },
+	LeftElbow = { "LeftUpperArm", "LeftLowerArm", Vector3.new(-0.99, -0.2, 0) },
+	LeftWrist = { "LeftLowerArm", "LeftHand", Vector3.new(-0.99, -1.15, 0) },
+	RightShoulder = { "UpperTorso", "RightUpperArm", Vector3.new(0.99, 0.75, 0) },
+	RightElbow = { "RightUpperArm", "RightLowerArm", Vector3.new(0.99, -0.2, 0) },
+	RightWrist = { "RightLowerArm", "RightHand", Vector3.new(0.99, -1.15, 0) },
+	LeftHip = { "LowerTorso", "LeftUpperLeg", Vector3.new(-0.38, -0.8, 0) },
+	LeftKnee = { "LeftUpperLeg", "LeftLowerLeg", Vector3.new(-0.38, -1.95, 0) },
+	LeftAnkle = { "LeftLowerLeg", "LeftFoot", Vector3.new(-0.38, -3.05, 0) },
+	RightHip = { "LowerTorso", "RightUpperLeg", Vector3.new(0.38, -0.8, 0) },
+	RightKnee = { "RightUpperLeg", "RightLowerLeg", Vector3.new(0.38, -1.95, 0) },
+	RightAnkle = { "RightLowerLeg", "RightFoot", Vector3.new(0.38, -3.05, 0) },
+}
+
+local function bodyPart(name: string, size: Vector3, center: Vector3): Part
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Size = size
+	p.CFrame = CFrame.new(center)
+	p.Color = CHARCOAL
+	p.Material = Enum.Material.SmoothPlastic
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.CanCollide = false
+	p.CanTouch = false
+	p.CastShadow = true
+	return p
+end
+
+-- A decoration welded onto a body part. cf is relative to that part.
+local function deco(body: BasePart, name: string, class: string, size: Vector3, cf: CFrame, color: Color3, material: Enum.Material?)
+	local p = Instance.new(class) :: BasePart
+	p.Name = name
+	p.Size = size
+	p.CFrame = body.CFrame * cf
+	p.Color = color
+	p.Material = material or Enum.Material.SmoothPlastic
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Anchored = false
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Massless = true
+	p.CastShadow = material ~= Enum.Material.Neon
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = body
+	weld.Part1 = p
+	weld.Parent = p
+	p.Parent = body
+	return p
+end
+
+-- A jagged crack across one face of a body part. points are {x, y} pairs on that
+-- face, from -0.5 to 0.5 of its width and height. face is "Front", "Back", "Left" or "Right".
+local function crack(body: BasePart, face: string, points)
+	local size = body.Size
+	local function toLocal(pt): Vector3
+		local x, y = pt[1], pt[2]
+		if face == "Front" then
+			return Vector3.new(x * size.X, y * size.Y, -size.Z / 2)
+		elseif face == "Back" then
+			return Vector3.new(-x * size.X, y * size.Y, size.Z / 2)
+		elseif face == "Left" then
+			return Vector3.new(-size.X / 2, y * size.Y, x * size.Z)
+		else
+			return Vector3.new(size.X / 2, y * size.Y, -x * size.Z)
+		end
+	end
+	for i = 1, #points - 1 do
+		local a, b = toLocal(points[i]), toLocal(points[i + 1])
+		local mid = (a + b) / 2
+		local len = (b - a).Magnitude
+		-- Lie flat on the face: long axis along the segment, thin axis along the face normal
+		local normal = if face == "Front" then -Vector3.zAxis
+			elseif face == "Back" then Vector3.zAxis
+			elseif face == "Left" then -Vector3.xAxis
+			else Vector3.xAxis
+		local along = (b - a).Unit
+		local side = along:Cross(normal).Unit
+		local cf = CFrame.fromMatrix(mid + normal * 0.01, side, normal, -along)
+		deco(body, "AshCrack", "Part", Vector3.new(0.09, 0.04, len + 0.05), cf, EMBER, Enum.Material.Neon)
+	end
+end
+
+local function addLooks(parts)
+	local head = parts.Head
+	local hs = head.Size
+
+	-- Blank glowing eyes, angled into a determined look
+	for _, side in { -1, 1 } do
+		deco(head, "AshEye", "Part", Vector3.new(0.3, 0.15, 0.05),
+			CFrame.new(0.24 * side, 0.06, -hs.Z / 2 - 0.01) * CFrame.Angles(0, 0, 0.18 * side), EYE, Enum.Material.Neon)
+	end
+	-- Swept-back ash spikes, ember-tipped
+	for _, spec in { { -0.3, 0.75 }, { 0, 0.95 }, { 0.3, 0.75 } } do
+		local x, len = spec[1], spec[2]
+		local spike = deco(head, "AshSpike", "WedgePart", Vector3.new(0.32, 0.45, len),
+			CFrame.new(x, hs.Y / 2 + 0.05, 0.2) * CFrame.Angles(0.35, 0, 0), CHARCOAL_DARK)
+		deco(spike, "AshCrack", "Part", Vector3.new(0.3, 0.05, 0.18),
+			CFrame.new(0, -0.18, len / 2 - 0.1), EMBER, Enum.Material.Neon)
+	end
+	crack(head, "Right", { { -0.3, 0.3 }, { -0.05, 0.05 }, { 0.15, 0.15 } })
+
+	-- Scarf knot around the neck (AshFx streams the tail behind it)
+	deco(parts.UpperTorso, "AshScarfKnot", "Part", Vector3.new(1.0, 0.32, 0.92),
+		CFrame.new(0, 0.62, 0), SCARF)
+	deco(parts.UpperTorso, "AshScarfFold", "WedgePart", Vector3.new(0.5, 0.35, 0.3),
+		CFrame.new(0.2, 0.42, -0.42) * CFrame.Angles(0, 0, math.rad(180)), SCARF)
+
+	-- Glowing cracks across the body
+	crack(parts.UpperTorso, "Front", { { -0.35, 0.3 }, { -0.1, 0.05 }, { -0.2, -0.15 }, { 0.15, -0.4 } })
+	crack(parts.UpperTorso, "Front", { { 0.3, 0.25 }, { 0.15, 0.05 } })
+	crack(parts.UpperTorso, "Back", { { 0.3, 0.35 }, { 0.05, 0.1 }, { 0.2, -0.1 }, { -0.25, -0.35 } })
+	crack(parts.LowerTorso, "Front", { { -0.3, 0.3 }, { 0.1, -0.2 } })
+	for _, side in { "Left", "Right" } do
+		local s = if side == "Left" then -1 else 1
+		crack(parts[side .. "UpperArm"], side, { { 0.1, 0.35 }, { -0.15, 0.05 }, { 0.1, -0.3 } })
+		crack(parts[side .. "LowerArm"], side, { { -0.1, 0.3 }, { 0.15, -0.1 } })
+		crack(parts[side .. "UpperLeg"], "Front", { { 0.2 * s, 0.35 }, { -0.1 * s, 0.05 }, { 0.15 * s, -0.35 } })
+		crack(parts[side .. "LowerLeg"], side, { { 0.15, 0.3 }, { -0.1, 0 }, { 0.1, -0.3 } })
+	end
+
+	-- Flame-wrapped sneakers: dark shoe, glowing sole, flame shapes up the sides
+	for _, side in { "Left", "Right" } do
+		local foot = parts[side .. "Foot"]
+		local fs = foot.Size
+		foot.Color = CHARCOAL_DARK
+		deco(foot, "AshCrack", "Part", Vector3.new(fs.X + 0.04, 0.08, fs.Z + 0.04),
+			CFrame.new(0, -fs.Y / 2 + 0.03, 0), EMBER, Enum.Material.Neon)
+		deco(foot, "AshToe", "Part", Vector3.new(fs.X + 0.02, fs.Y * 0.6, 0.28),
+			CFrame.new(0, -0.05, -fs.Z / 2 + 0.13), Color3.fromRGB(230, 225, 215))
+		for _, s in { -1, 1 } do
+			-- Two flame tongues licking up from the heel along each side
+			deco(foot, "AshCrack", "WedgePart", Vector3.new(0.03, 0.32, 0.45),
+				CFrame.new(s * (fs.X / 2 + 0.01), 0.02, 0.18), EMBER, Enum.Material.Neon)
+			deco(foot, "AshCrack", "WedgePart", Vector3.new(0.03, 0.22, 0.3),
+				CFrame.new(s * (fs.X / 2 + 0.01), -0.03, -0.12), EMBER, Enum.Material.Neon)
+		end
+		local att = Instance.new("Attachment")
+		att.Name = "AshFlame"
+		att.Position = Vector3.new(0, -0.05, 0.35)
+		att.Parent = foot
+		local fire = Instance.new("ParticleEmitter")
+		fire.Name = "Flames"
+		fire.Texture = "rbxasset://textures/particles/fire_main.dds"
+		fire.Color = ColorSequence.new(Color3.fromRGB(255, 200, 80), Color3.fromRGB(220, 40, 10))
+		fire.LightEmission = 1
+		fire.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.55), NumberSequenceKeypoint.new(1, 0) })
+		fire.Transparency = NumberSequence.new(0.2, 1)
+		fire.Lifetime = NumberRange.new(0.2, 0.35)
+		fire.Speed = NumberRange.new(1.5, 3)
+		fire.SpreadAngle = Vector2.new(25, 25)
+		fire.Acceleration = Vector3.new(0, 8, 0)
+		fire.Rate = 12
+		fire.Parent = att
+	end
+
+	-- Hands and lower legs a shade darker, like gloves and wraps
+	for _, name in { "LeftHand", "RightHand" } do
+		parts[name].Color = CHARCOAL_DARK
+	end
+end
+
+-- Returns a fresh Ash model, ready to be used as StarterPlayer.StarterCharacter.
+function AshBuilder.Build(): Model
+	local model = Instance.new("Model")
+	model.Name = "StarterCharacter"
+
+	local parts = {}
+	for name, spec in BODY do
+		local p = bodyPart(name, spec[1], spec[2])
+		parts[name] = p
+		p.Parent = model
+	end
+	local root = parts.HumanoidRootPart
+	root.Transparency = 1
+	root.CastShadow = false
+	model.PrimaryPart = root
+
+	-- Rig attachments at each joint, then let the Humanoid build the Motor6Ds
+	for jointName, spec in JOINTS do
+		local parent, child, at = parts[spec[1]], parts[spec[2]], spec[3]
+		for _, p in { parent, child } do
+			local a = Instance.new("Attachment")
+			a.Name = jointName .. "RigAttachment"
+			a.CFrame = p.CFrame:ToObjectSpace(CFrame.new(at))
+			a.Parent = p
+		end
+	end
+	-- Attachments that accessories and effects expect on R15 rigs
+	local neckTop = Instance.new("Attachment")
+	neckTop.Name = "NeckAttachment"
+	neckTop.Position = Vector3.new(0, parts.UpperTorso.Size.Y / 2, 0)
+	neckTop.Parent = parts.UpperTorso
+
+	local humanoid = Instance.new("Humanoid")
+	humanoid.RigType = Enum.HumanoidRigType.R15
+	humanoid.HipHeight = -GROUND_Y - root.Size.Y / 2
+	humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	humanoid.Parent = model
+	humanoid:BuildRigFromAttachments()
+
+	addLooks(parts)
+
+	model:SetAttribute("AshCharacter", true)
+	return model
+end
+
+return AshBuilder
+]=====])
+script(f, 'Script', 'AshCharacter', [=====[-- Makes Ash the character everyone plays as: builds him once at server start,
+-- installs him as StarterPlayer.StarterCharacter, and (re)spawns anyone who
+-- loaded in before he was ready.
+
+local Players = game:GetService("Players")
+local StarterPlayer = game:GetService("StarterPlayer")
+
+local AshBuilder = require(script.Parent:WaitForChild("AshBuilder"))
+
+local old = StarterPlayer:FindFirstChild("StarterCharacter")
+if old then
+	old:Destroy()
+end
+local ash = AshBuilder.Build()
+ash.Parent = StarterPlayer
+
+-- Anyone who spawned as their own avatar before Ash existed gets respawned as him
+for _, player in Players:GetPlayers() do
+	local character = player.Character
+	if character and not character:GetAttribute("AshCharacter") then
+		player:LoadCharacter()
+	end
+end
+]=====])
 script(f, 'Script', 'BuildTestLevel', [=====[-- Builds the test level when the server starts, unless one is already in Workspace
 -- (for example because you generated it in Edit mode to look at or tweak).
 require(script.Parent:WaitForChild("LevelBuilder")).Build()

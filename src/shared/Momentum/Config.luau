@@ -115,6 +115,13 @@ local Config = {
 	AfterimageLifetime = 0.3, -- seconds each ghost takes to fade out
 	AfterimageStartTransparency = 0.45, -- how solid a fresh ghost is at full strength
 
+	-- Ash (the main character)
+	AshGlowFullSpeed = 150, -- his cracks and sneaker flames are at full blaze by this speed
+	AshScarfSegments = 7, -- links in the scarf tail
+	AshScarfSegmentLength = 0.5,
+	AshScarfDrag = 3, -- air drag on the scarf; higher streams it straighter behind
+	AshScarfFlutter = 40, -- how hard the tail whips about at speed
+
 	CollisionGroup = "MomentumPlayer",
 }
 

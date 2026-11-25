@@ -7,6 +7,7 @@ local Workspace = game:GetService("Workspace")
 
 local Config = require(script.Parent.Config)
 local RunCycle = require(script.Parent.RunCycle)
+local AshFx = require(script.Parent.AshFx)
 
 local CharacterFx = {}
 CharacterFx.__index = CharacterFx
@@ -125,6 +126,10 @@ function CharacterFx.new(character: Model, humanoid: Humanoid, root: BasePart, c
 	self.ghostFolder = ghostFolder
 	self.ghosts = {}
 	self.ghostTimer = 0
+
+	if AshFx.Is(character) then
+		self.ash = AshFx.new(character, ctrl)
+	end
 
 	return self
 end
@@ -307,6 +312,9 @@ function CharacterFx:Update(dt: number)
 	end
 
 	self:UpdateGhosts(dt, speed)
+	if self.ash then
+		self.ash:Update(dt, speed, self.hidden)
+	end
 
 	self.trail.Enabled = ctrl.boosting
 	self.light.Brightness = ctrl.heat * 1.5 + (if ctrl.boosting then 2.5 else 0)
@@ -323,6 +331,9 @@ function CharacterFx:Destroy()
 	end
 	self.ball:Destroy()
 	self.ghostFolder:Destroy()
+	if self.ash then
+		self.ash:Destroy()
+	end
 	self.trail:Destroy()
 	self.light:Destroy()
 end
