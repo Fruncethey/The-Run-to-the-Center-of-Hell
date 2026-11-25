@@ -379,6 +379,7 @@ local Config = {
 	AirDashSpeed = 110, -- jump again in the air with no target locked
 	AirDashLift = 8,
 	StompSpeed = 170, -- roll button in the air slams you down
+	StompMinAirTime = 0.25, -- so pressing roll as you crest a small bump doesn't stomp
 
 	-- Jump
 	JumpPower = 55, -- launched along the surface normal
@@ -399,12 +400,16 @@ local Config = {
 	VisualUpRate = 12,
 
 	-- Rolling and spin-dash
-	RollMinSpeed = 20,
-	RollEndSpeed = 8,
-	RollFriction = 10,
-	RollTurnRate = 1.6,
-	RollSlopeDown = 1.7, -- rolling downhill gains more speed
-	RollSlopeUp = 0.7, -- and loses less going uphill
+	-- Rolling keeps momentum better than running but steers and brakes worse,
+	-- and holding forward doesn't speed you up: slopes are your engine.
+	RollMinSpeed = 20, -- hold the roll button above this speed to curl up
+	RollEndSpeed = 8, -- uncurl below this speed
+	RollFriction = 4, -- running sheds speed above TopSpeed much faster (RunOverspeedDrag)
+	RollTurnFactor = 0.35, -- share of running's turn rate you keep while rolling
+	RollBrake = 30, -- holding back while rolling (running brakes at Decel)
+	RollSlopeDown = 2.0, -- rolling downhill gains twice the speed running does
+	RollSlopeUp = 0.5, -- and loses half as much going uphill
+	RunOverspeedDrag = 25, -- running above TopSpeed (not boosting) bleeds back down to it
 	SpinDashMaxStartSpeed = 20,
 	SpinChargeTime = 0.9, -- seconds of holding for a full charge
 	SpinRevBonus = 0.25, -- each jump tap while charging adds this much charge
@@ -502,6 +507,12 @@ local function rotateToward(dir: Vector3, target: Vector3, normal: Vector3, maxA
 	return CFrame.fromAxisAngle(axis, maxAngle) * dir
 end
 
+-- How fast running can turn: sharp when slow, wide arcs at top speed.
+local function runTurnRate(speed: number): number
+	local t = math.clamp(speed / Config.TopSpeed, 0, 1)
+	return Config.TurnRateSlow + (Config.TurnRateFast - Config.TurnRateSlow) * t
+end
+
 local function towards(a: Vector3, b: Vector3, t: number): Vector3
 	if a:Dot(b) < -0.95 then
 		a = (a + Vector3.new(0.1, 0, 0.05)).Unit
@@ -545,6 +556,7 @@ function Controller.new(character: Model, humanoid: Humanoid, root: BasePart)
 	-- Air moves and homing attack
 	self.airDashed = false
 	self.stomping = false
+	self.airTime = 0
 	self.homingTarget = nil -- BasePart we're flying at
 	self.homingTime = 0
 	self.lockTarget = nil -- set each frame by the lock-on system
@@ -624,6 +636,7 @@ function Controller:Step(dt: number, camCF: CFrame)
 	local input = self.input
 	self.airGrace = math.max(0, self.airGrace - dt)
 	self.attackTimer = math.max(0, self.attackTimer - dt)
+	self.airTime = if self.grounded then 0 else self.airTime + dt
 	self.hurtTimer = math.max(0, self.hurtTimer - dt)
 
 	local planeUp = if self.grounded then self.up else WORLD_UP
@@ -647,7 +660,12 @@ function Controller:Step(dt: number, camCF: CFrame)
 	end
 	if input.rollPressed then
 		input.rollPressed = false
-		if not self.grounded and not self.homingTarget and not self.stomping then
+		if
+			not self.grounded
+			and not self.homingTarget
+			and not self.stomping
+			and self.airTime >= Config.StompMinAirTime
+		then
 			self:Stomp()
 		end
 	end
@@ -829,8 +847,13 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 	if self.charging then
 		-- braking handled in UpdateRollAndCharge
 	elseif self.rolling then
+		-- No acceleration, a weak brake and a third of the steering, but very little friction
 		if w and dir then
-			dir = rotateToward(dir, w, n, Config.RollTurnRate * dt)
+			if w:Dot(dir) < -0.5 then
+				speed = math.max(0, speed - Config.RollBrake * amount * dt)
+			else
+				dir = rotateToward(dir, w, n, runTurnRate(speed) * Config.RollTurnFactor * amount * dt)
+			end
 		end
 		speed = math.max(0, speed - Config.RollFriction * dt)
 		if speed < Config.RollEndSpeed then
@@ -845,9 +868,7 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 			if along < -0.5 and not self.boosting then
 				speed = math.max(0, speed - Config.Decel * dt)
 			else
-				local t = math.clamp(speed / Config.TopSpeed, 0, 1)
-				local rate = Config.TurnRateSlow + (Config.TurnRateFast - Config.TurnRateSlow) * t
-				dir = rotateToward(dir, w, n, rate * dt)
+				dir = rotateToward(dir, w, n, runTurnRate(speed) * dt)
 				if speed < Config.TopSpeed and not self.boosting then
 					speed = math.min(Config.TopSpeed, speed + Config.Accel * amount * dt)
 				end
@@ -855,6 +876,11 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 		end
 	elseif not self.boosting then
 		speed = math.max(0, speed - Config.Friction * dt)
+	end
+
+	-- Running can't hold onto speed past TopSpeed the way a roll can
+	if not self.rolling and not self.charging and not self.boosting and speed > Config.TopSpeed then
+		speed = math.max(Config.TopSpeed, speed - Config.RunOverspeedDrag * dt)
 	end
 
 	if dir then
