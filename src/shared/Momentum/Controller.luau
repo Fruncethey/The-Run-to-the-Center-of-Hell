@@ -95,6 +95,8 @@ function Controller.new(character: Model, humanoid: Humanoid, root: BasePart)
 
 	self.spawnPosition = root.Position
 	self.spawnFacing = self.facing
+	self.initialSpawnPosition = root.Position
+	self.initialSpawnFacing = self.facing
 
 	self.input = {
 		move = Vector2.zero,
@@ -118,6 +120,15 @@ function Controller:SetFacing(look: Vector3)
 	local f = safeUnit(flatten(look), nil)
 	if f then
 		self.facing = f
+		self.spawnFacing = f
+		self.initialSpawnFacing = f
+	end
+end
+
+function Controller:SetCheckpoint(position: Vector3, facing: Vector3)
+	self.spawnPosition = position
+	local f = safeUnit(flatten(facing), nil)
+	if f then
 		self.spawnFacing = f
 	end
 end
@@ -710,6 +721,12 @@ function Controller:Respawn()
 	self.homingTarget = nil
 	self.heat = 0
 	self.respawnCount = (self.respawnCount or 0) + 1
+end
+
+function Controller:ResetToStart()
+	self.spawnPosition = self.initialSpawnPosition
+	self.spawnFacing = self.initialSpawnFacing
+	self:Respawn()
 end
 
 -- Write our simulated state to the character. Called every frame before physics.

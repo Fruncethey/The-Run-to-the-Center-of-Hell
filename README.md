@@ -9,7 +9,8 @@ A custom momentum character controller for Roblox, plus a test level.
 | `src/shared/Momentum/Config.luau` | Every tuning number (speeds, gravity, slope factor, boost, camera). Start here when tweaking feel. |
 | `src/shared/Momentum/Controller.luau` | The controller: own velocity, slope physics, ground snapping, surface alignment (walls, loops, ceilings), jump, roll, spin-dash, heat and boost. |
 | `src/shared/Momentum/ChaseCamera.luau` | Chase camera that swings behind your direction of travel, pulls back and widens FOV with speed. |
-| `src/shared/Momentum/Hud.luau` | Speedometer, heat meter, state readout, controls hint. |
+| `src/shared/Momentum/Hud.luau` | Speedometer, heat meter, state readout, tutorial stage banner, run timer, checkpoint toast and completion screen. |
+| `src/shared/Momentum/TutorialTracker.luau` | Tracks tutorial stage zones, checkpoints, run timer, peak speed and the finish gate. |
 | `src/shared/Momentum/RunCycle.luau` | Procedural run cycle (R15 and R6) driven by speed: walk, run and sprint blend together, with idle and in-air poses. |
 | `src/shared/Momentum/CharacterFx.luau` | Runs the run cycle (R6 falls back to default animations), spin-ball, boost trail, glow and afterimages. |
 | `src/shared/Momentum/InputState.luau` | Keyboard and gamepad input. |
@@ -20,7 +21,7 @@ A custom momentum character controller for Roblox, plus a test level.
 | `src/client/MomentumClient.client.luau` | Starts everything for the local player. |
 | `src/server/AshBuilder.luau` + `AshCharacter.server.luau` | Builds Ash, the main character, and makes him everyone's `StarterCharacter`. |
 | `src/server/PlayerSetup.server.luau` | Collision group for characters, turns off shift-lock (Shift is boost). |
-| `src/server/LevelBuilder.luau` + `BuildTestLevel.server.luau` | Builds the test level on server start (skips it if `Workspace.HellTestLevel` already exists). |
+| `src/server/LevelBuilder.luau` + `BuildTestLevel.server.luau` | Builds "Circle 0: The Descent Gate", a full 8-stage tutorial level on server start (skips if `Workspace.HellTestLevel` already exists). |
 | `InstallInStudio.luau` | One-paste installer for the Studio Command Bar (no Rojo needed). |
 | `tools/make_installer.py` | Regenerates `InstallInStudio.luau` from `src/` (`python3 tools/make_installer.py .`). |
 | `default.project.json` | Rojo project. |
@@ -35,7 +36,7 @@ Scripts go to `ReplicatedStorage.Momentum`, `ServerScriptService.MomentumServer`
 View > Command Bar, paste all of `InstallInStudio.luau`, press Enter. Running it again replaces the scripts.
 
 If your place already has a `Workspace.HellTestLevel` from an older version, delete it so the level is rebuilt
-with the newest layout (including enemy spawns) the next time you press Play.
+with the newest layout (including checkpoints, tutorial zones and enemy spawns) the next time you press Play.
 
 Then press Play (F5). The level floats 200 studs up over a lava sea, so your old Baseplate is unaffected;
 its spawn gets disabled so you start on the level's orange spawn pad.
@@ -51,23 +52,22 @@ its spawn gets disabled so you start on the level's orange spawn pad.
 | Spin-dash (hold while slow, release to launch; tap jump to rev) / roll (hold while fast) | Q, Left Ctrl or C | X or B |
 | Boost (needs heat) | Left Shift or E | R2 or Y |
 | Look around | Hold right mouse and drag, wheel to zoom | Right stick |
-| Respawn | R | Select |
+| Respawn at checkpoint (or restart after finishing) | R | Select |
 
 The heat meter fills while you go faster than 50 studs/s. Boost needs the bar past the white tick.
 
-## Test checklist
+## Tutorial course ("Circle 0: The Descent Gate")
 
-1. **The drop:** hold W from spawn. You should hit about 110 on the speedometer at the bottom.
-2. **Hill:** you slow going up, speed back up coming down.
-3. **Loop:** go in at 85+ and you run the full loop, coming out 16 studs to the right. Go in slow and you peel off the top and fall.
-4. **Launch ramp:** right after the loop, sends you flying.
-5. **Quarter pipe (end):** go vertical, run out of speed, fall back in and ride it back down. Boost up it to fly onto the ledge behind.
-6. **Wall run:** after the drop, steer left (A briefly) toward the long curved wall on the left. The HUD says WALL RUN.
-7. **Spin-dash:** stand still, hold Q for a second, release.
-8. **Boost:** once the heat bar passes the tick, hold Shift.
-9. **Enemies:** the two imps after the drop hurt you if you just run into them. Roll, boost or jump into them instead.
-10. **Homing chain:** run off the launch ramp and tap Space each time the reticle lands on an imp. You bounce from one to the next.
-11. **Air control:** in the air, steer with WASD (your path bends gradually), pull back to brake, tap Space with nothing locked to air dash, press Q to stomp.
+The tutorial spans 8 progressive stages with 7 checkpoints, contextual HUD stage prompts, a run timer, and a finish gate:
+
+1. **Stage 1 · Run & Jump:** build speed on the runway, tap `Space` over the low hurdle and gap, hold `Space` over the tall hurdle.
+2. **Stage 2 · Roll & Momentum:** hold `Q` down the big drop for 2x downhill acceleration, bowl through two patrolling Cinder Imps, and carry momentum over the hill.
+3. **Stage 3 · Spin-Dash & Loop:** hold `Q` while slow (tap `Space` to rev) and release to launch through the vertical loop.
+4. **Stage 4 · Air Dash & Steering:** jump off the ramp and tap `Space` in mid-air to Air Dash across the lava chasm, then bend your flight path with `A`/`D` onto the offset landing.
+5. **Stage 5 · Homing Attack:** jump toward the 4-imp chain and tap `Space` whenever the red reticle locks on to bounce up to the high terrace.
+6. **Stage 6 · Stomp:** jump off the ledge and press `Q` in mid-air to Stomp through the imp onto the 30° ramp for an instant downhill speed launch.
+7. **Stage 7 · Heat, Boost & Wall Run:** build Heat on the straightaway, then hold `Shift` to Boost straight through the imp gauntlet — or steer left onto the curved wall-run pipe.
+8. **Finale · Full Throttle:** ride the dip and Boost through the Giant Loop, launch off the sky ramp, and smash through **The Descent Gate** to finish (press `R` after finishing to run it again).
 
 ## How it works (short version)
 
