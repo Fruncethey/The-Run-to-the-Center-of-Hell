@@ -1113,6 +1113,8 @@ function Controller.new(character: Model, humanoid: Humanoid, root: BasePart)
 
 	self.spawnPosition = root.Position
 	self.spawnFacing = self.facing
+	self.initialSpawnPosition = root.Position
+	self.initialSpawnFacing = self.facing
 
 	self.input = {
 		move = Vector2.zero,
@@ -1136,6 +1138,15 @@ function Controller:SetFacing(look: Vector3)
 	local f = safeUnit(flatten(look), nil)
 	if f then
 		self.facing = f
+		self.spawnFacing = f
+		self.initialSpawnFacing = f
+	end
+end
+
+function Controller:SetCheckpoint(position: Vector3, facing: Vector3)
+	self.spawnPosition = position
+	local f = safeUnit(flatten(facing), nil)
+	if f then
 		self.spawnFacing = f
 	end
 end
@@ -1730,6 +1741,12 @@ function Controller:Respawn()
 	self.respawnCount = (self.respawnCount or 0) + 1
 end
 
+function Controller:ResetToStart()
+	self.spawnPosition = self.initialSpawnPosition
+	self.spawnFacing = self.initialSpawnFacing
+	self:Respawn()
+end
+
 -- Write our simulated state to the character. Called every frame before physics.
 function Controller:Apply()
 	local up = self.visualUp
@@ -1856,13 +1873,150 @@ function Hud.new(playerGui: PlayerGui)
 		TextTransparency = 0.15,
 	})
 
+	-- Tutorial stage prompt banner (top center, auto-hidden when no tutorial zone is active)
+	local banner = Instance.new("Frame")
+	banner.Name = "TutorialBanner"
+	banner.AnchorPoint = Vector2.new(0.5, 0)
+	banner.Position = UDim2.new(0.5, 0, 0, 78)
+	banner.Size = UDim2.fromOffset(640, 56)
+	banner.BackgroundColor3 = Color3.fromRGB(24, 10, 10)
+	banner.BackgroundTransparency = 0.25
+	banner.BorderSizePixel = 0
+	banner.Visible = false
+	banner.Parent = gui
+	Instance.new("UICorner", banner).CornerRadius = UDim.new(0, 8)
+	local bannerStroke = Instance.new("UIStroke", banner)
+	bannerStroke.Color = Color3.fromRGB(255, 115, 35)
+	bannerStroke.Thickness = 1.5
+	bannerStroke.Transparency = 0.25
+
+	self.banner = banner
+	self.bannerTitle = label(banner, {
+		Text = "",
+		TextSize = 15,
+		Font = Enum.Font.GothamBlack,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Color3.fromRGB(255, 175, 85),
+		Position = UDim2.fromOffset(12, 6),
+		Size = UDim2.new(1, -24, 0, 20),
+	})
+	self.bannerHint = label(banner, {
+		Text = "",
+		TextSize = 14,
+		Font = Enum.Font.GothamMedium,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Color3.fromRGB(255, 240, 225),
+		Position = UDim2.fromOffset(12, 28),
+		Size = UDim2.new(1, -24, 0, 22),
+	})
+
+	-- Run timer & checkpoint counter (top right)
+	local courseBox = Instance.new("Frame")
+	courseBox.Name = "CourseStats"
+	courseBox.AnchorPoint = Vector2.new(1, 0)
+	courseBox.Position = UDim2.new(1, -24, 0, 78)
+	courseBox.Size = UDim2.fromOffset(168, 56)
+	courseBox.BackgroundColor3 = Color3.fromRGB(24, 10, 10)
+	courseBox.BackgroundTransparency = 0.3
+	courseBox.BorderSizePixel = 0
+	courseBox.Visible = false
+	courseBox.Parent = gui
+	Instance.new("UICorner", courseBox).CornerRadius = UDim.new(0, 8)
+	local courseStroke = Instance.new("UIStroke", courseBox)
+	courseStroke.Color = Color3.fromRGB(255, 115, 35)
+	courseStroke.Thickness = 1.5
+	courseStroke.Transparency = 0.35
+
+	self.courseBox = courseBox
+	self.timerLabel = label(courseBox, {
+		Text = "00:00.0",
+		TextSize = 24,
+		Font = Enum.Font.GothamBlack,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Position = UDim2.fromOffset(10, 4),
+		Size = UDim2.new(1, -20, 0, 28),
+	})
+	self.cpLabel = label(courseBox, {
+		Text = "CP 0 / 0",
+		TextSize = 13,
+		Font = Enum.Font.GothamBold,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextColor3 = Color3.fromRGB(120, 225, 255),
+		Position = UDim2.fromOffset(10, 34),
+		Size = UDim2.new(1, -20, 0, 16),
+	})
+
+	-- Checkpoint toast (below banner)
+	self.toast = label(gui, {
+		Text = "",
+		TextSize = 20,
+		Font = Enum.Font.GothamBlack,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Color3.fromRGB(80, 230, 255),
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0, 144),
+		Size = UDim2.fromOffset(560, 28),
+		Visible = false,
+	})
+
+	-- Completion overlay (shown after crossing the Descent Gate)
+	local complete = Instance.new("Frame")
+	complete.Name = "TutorialComplete"
+	complete.AnchorPoint = Vector2.new(0.5, 0.5)
+	complete.Position = UDim2.fromScale(0.5, 0.42)
+	complete.Size = UDim2.fromOffset(440, 176)
+	complete.BackgroundColor3 = Color3.fromRGB(18, 10, 14)
+	complete.BackgroundTransparency = 0.14
+	complete.BorderSizePixel = 0
+	complete.Visible = false
+	complete.Parent = gui
+	Instance.new("UICorner", complete).CornerRadius = UDim.new(0, 12)
+	local completeStroke = Instance.new("UIStroke", complete)
+	completeStroke.Color = Color3.fromRGB(50, 225, 255)
+	completeStroke.Thickness = 2.5
+
+	self.complete = complete
+	label(complete, {
+		Text = "TUTORIAL COMPLETE!",
+		TextSize = 30,
+		Font = Enum.Font.GothamBlack,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Color3.fromRGB(80, 230, 255),
+		Position = UDim2.fromOffset(16, 18),
+		Size = UDim2.new(1, -32, 0, 38),
+	})
+	self.completeStats = label(complete, {
+		Text = "",
+		TextSize = 18,
+		Font = Enum.Font.GothamBold,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Color3.fromRGB(255, 235, 210),
+		Position = UDim2.fromOffset(16, 68),
+		Size = UDim2.new(1, -32, 0, 52),
+	})
+	label(complete, {
+		Text = "Press R to run the tutorial again",
+		TextSize = 15,
+		Font = Enum.Font.GothamMedium,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextColor3 = Color3.fromRGB(255, 175, 95),
+		Position = UDim2.fromOffset(16, 134),
+		Size = UDim2.new(1, -32, 0, 24),
+	})
+
 	gui.Parent = playerGui
 	self.gui = gui
 	self.t = 0
 	return self
 end
 
-function Hud:Update(ctrl, dt: number)
+local function formatTime(seconds: number): string
+	local mins = math.floor(seconds / 60)
+	local secs = seconds - mins * 60
+	return string.format("%02d:%04.1f", mins, secs)
+end
+
+function Hud:Update(ctrl, dt: number, tutorial)
 	if not ctrl then
 		return
 	end
@@ -1897,6 +2051,43 @@ function Hud:Update(ctrl, dt: number)
 	self.heatLabel.Text = if ctrl.boosting then "HEAT  >> BOOSTING" elseif ready then "HEAT  (Shift to boost)" else "HEAT"
 	local pulse = if ctrl.boosting then 0.5 + 0.5 * math.sin(self.t * 30) else 0
 	self.barStroke.Color = Color3.fromRGB(255, 120, 40):Lerp(Color3.fromRGB(255, 245, 200), pulse)
+
+	if tutorial and tutorial:HasCourse() then
+		self.courseBox.Visible = true
+		self.timerLabel.Text = formatTime(tutorial.elapsed)
+		self.cpLabel.Text = string.format("CHECKPOINT %d / %d", tutorial.checkpointIndex, tutorial.totalCheckpoints)
+
+		local showBanner = not tutorial.finished and tutorial.currentTitle ~= ""
+		self.banner.Visible = showBanner
+		if showBanner then
+			self.bannerTitle.Text = tutorial.currentTitle
+			self.bannerHint.Text = tutorial.currentHint
+		end
+
+		if tutorial.toastText and tutorial.toastTimer > 0 then
+			self.toast.Visible = true
+			self.toast.Text = tutorial.toastText
+			local alpha = math.clamp(tutorial.toastTimer / 0.6, 0, 1)
+			self.toast.TextTransparency = 1 - alpha
+			self.toast.TextStrokeTransparency = 0.4 + 0.6 * (1 - alpha)
+		else
+			self.toast.Visible = false
+		end
+
+		self.complete.Visible = tutorial.finished
+		if tutorial.finished then
+			self.completeStats.Text = string.format(
+				"TIME: %s\nTOP SPEED: %d STUDS / SEC",
+				formatTime(tutorial.elapsed),
+				math.floor(tutorial.peakSpeed + 0.5)
+			)
+		end
+	else
+		self.courseBox.Visible = false
+		self.banner.Visible = false
+		self.toast.Visible = false
+		self.complete.Visible = false
+	end
 end
 
 return Hud
@@ -2507,6 +2698,222 @@ end
 
 return RunCycle
 ]=====])
+script(f, 'ModuleScript', 'TutorialTracker', [=====[-- Client-side tracker for the tutorial level's stage zones, checkpoints,
+-- run timer, and finish gate. Uses direct bounding-box checks against the
+-- controller's position so fast movement never skips a trigger.
+
+local Workspace = game:GetService("Workspace")
+
+local LEVEL_NAME = "HellTestLevel"
+local COLOR_IDLE = Color3.fromRGB(255, 110, 30)
+local COLOR_ACTIVE = Color3.fromRGB(30, 220, 255)
+
+local TutorialTracker = {}
+TutorialTracker.__index = TutorialTracker
+
+local function insideBox(part: BasePart, point: Vector3): boolean
+	local rel = part.CFrame:PointToObjectSpace(point)
+	local half = part.Size * 0.5
+	return math.abs(rel.X) <= half.X and math.abs(rel.Y) <= half.Y and math.abs(rel.Z) <= half.Z
+end
+
+local function collectGlows(container: Instance): { BasePart }
+	local list = {}
+	for _, d in container:GetDescendants() do
+		if d:IsA("BasePart") and d:GetAttribute("GlowAccent") then
+			table.insert(list, d)
+		end
+	end
+	return list
+end
+
+local function setGlowColor(glows: { BasePart }, color: Color3)
+	for _, p in glows do
+		if p.Parent then
+			p.Color = color
+		end
+	end
+end
+
+function TutorialTracker.new(ctrl)
+	local self = setmetatable({}, TutorialTracker)
+	self.ctrl = ctrl
+	self.level = nil
+	self.zones = {}
+	self.checkpoints = {}
+	self.goal = nil
+
+	self.started = false
+	self.finished = false
+	self.elapsed = 0
+	self.peakSpeed = 0
+	self.checkpointIndex = 0
+	self.totalCheckpoints = 0
+	self.currentTitle = ""
+	self.currentHint = ""
+	self.toastText = nil
+	self.toastTimer = 0
+
+	self:BindLevel()
+	return self
+end
+
+function TutorialTracker:BindLevel()
+	local level = Workspace:FindFirstChild(LEVEL_NAME)
+	if not level or level == self.level then
+		return
+	end
+	self.level = level
+	self.zones = {}
+	self.checkpoints = {}
+	self.goal = nil
+
+	local zonesFolder = level:FindFirstChild("TutorialZones")
+	if zonesFolder then
+		for _, child in zonesFolder:GetChildren() do
+			if child:IsA("BasePart") then
+				table.insert(self.zones, {
+					part = child,
+					title = child:GetAttribute("ZoneTitle") or "",
+					hint = child:GetAttribute("ZoneHint") or "",
+					order = child:GetAttribute("ZoneOrder") or 0,
+				})
+			end
+		end
+		table.sort(self.zones, function(a, b)
+			return a.order < b.order
+		end)
+	end
+
+	local cpFolder = level:FindFirstChild("Checkpoints")
+	if cpFolder then
+		for _, child in cpFolder:GetChildren() do
+			local trigger = child:FindFirstChild("Trigger")
+			if trigger and trigger:IsA("BasePart") then
+				table.insert(self.checkpoints, {
+					folder = child,
+					trigger = trigger,
+					index = child:GetAttribute("CheckpointIndex") or 0,
+					label = child:GetAttribute("CheckpointLabel") or "",
+					glows = collectGlows(child),
+					reached = false,
+				})
+			end
+		end
+		table.sort(self.checkpoints, function(a, b)
+			return a.index < b.index
+		end)
+	end
+	self.totalCheckpoints = #self.checkpoints
+
+	local goalFolder = level:FindFirstChild("GoalGate")
+	if goalFolder then
+		local trigger = goalFolder:FindFirstChild("Trigger")
+		if trigger and trigger:IsA("BasePart") then
+			self.goal = {
+				folder = goalFolder,
+				trigger = trigger,
+				glows = collectGlows(goalFolder),
+			}
+		end
+	end
+end
+
+function TutorialTracker:HasCourse(): boolean
+	return #self.zones > 0 or self.totalCheckpoints > 0 or self.goal ~= nil
+end
+
+function TutorialTracker:Update(dt: number)
+	if not self.level or not self.level.Parent then
+		self.level = nil
+		self:BindLevel()
+	end
+	if not self.level then
+		return
+	end
+
+	local ctrl = self.ctrl
+	local pos = ctrl.position
+	local speed = ctrl:GetSpeed()
+
+	if not self.finished then
+		if not self.started and speed > 2 then
+			self.started = true
+		end
+		if self.started then
+			self.elapsed += dt
+		end
+		if speed > self.peakSpeed then
+			self.peakSpeed = speed
+		end
+	end
+
+	if self.toastTimer > 0 then
+		self.toastTimer = math.max(0, self.toastTimer - dt)
+		if self.toastTimer == 0 then
+			self.toastText = nil
+		end
+	end
+
+	-- Update active tutorial stage prompt
+	for _, z in self.zones do
+		if z.part.Parent and insideBox(z.part, pos) then
+			self.currentTitle = z.title
+			self.currentHint = z.hint
+			break
+		end
+	end
+
+	-- Checkpoints
+	for _, cp in self.checkpoints do
+		if not cp.reached and cp.trigger.Parent and insideBox(cp.trigger, pos) then
+			cp.reached = true
+			setGlowColor(cp.glows, COLOR_ACTIVE)
+			if cp.index > self.checkpointIndex then
+				self.checkpointIndex = cp.index
+				local spawnPos = cp.trigger:GetAttribute("SpawnPosition")
+				if typeof(spawnPos) ~= "Vector3" then
+					spawnPos = cp.trigger.Position
+				end
+				ctrl:SetCheckpoint(spawnPos, cp.trigger.CFrame.LookVector)
+				local suffix = if cp.label ~= "" then " — " .. cp.label else ""
+				self.toastText = string.format("CHECKPOINT %d / %d%s", cp.index, self.totalCheckpoints, suffix)
+				self.toastTimer = 2.6
+			end
+		end
+	end
+
+	-- Finish gate
+	if self.goal and not self.finished and self.goal.trigger.Parent and insideBox(self.goal.trigger, pos) then
+		self.finished = true
+		setGlowColor(self.goal.glows, COLOR_ACTIVE)
+		self.toastText = nil
+		self.toastTimer = 0
+	end
+end
+
+function TutorialTracker:Reset()
+	self.started = false
+	self.finished = false
+	self.elapsed = 0
+	self.peakSpeed = 0
+	self.checkpointIndex = 0
+	self.toastText = nil
+	self.toastTimer = 0
+
+	for _, cp in self.checkpoints do
+		cp.reached = false
+		setGlowColor(cp.glows, COLOR_IDLE)
+	end
+	if self.goal then
+		setGlowColor(self.goal.glows, COLOR_IDLE)
+	end
+
+	self.ctrl:ResetToStart()
+end
+
+return TutorialTracker
+]=====])
 end
 do local f = put(game:GetService('ServerScriptService'), 'MomentumServer')
 script(f, 'ModuleScript', 'AshBuilder', [=====[-- Builds Ash, the playable main character, on the standard Roblox R6 rig
@@ -2880,11 +3287,20 @@ end)
 
 spawnAll()
 ]=====])
-script(f, 'ModuleScript', 'LevelBuilder', [=====[-- Procedurally builds "Circle 0: The Test Pit", a small course for the momentum
--- controller: a starting drop, a hill, a loop, a launch ramp, a long wall-run
--- quarter pipe on the left, and a big quarter pipe at the end. It also places
--- invisible "EnemySpawn" markers that EnemyService fills with enemies.
--- The level floats over a lava sea; falling in respawns you.
+script(f, 'ModuleScript', 'LevelBuilder', [=====[-- Procedurally builds "Circle 0: The Descent Gate", a full 8-stage tutorial
+-- course teaching every mechanic of the momentum controller in order:
+--   1. Run & Jump        (acceleration, tap vs hold jump, forgiving gaps)
+--   2. Roll & Momentum   (downhill drop, rolling 2x slope gain, hill, imps)
+--   3. Spin-Dash & Loop  (charge & rev spin-dash, guided vertical loop)
+--   4. Air Dash & Control(launch ramp over lava chasm, mid-air steering)
+--   5. Homing Chain      (4-imp aerial chain climbing to a high terrace)
+--   6. Stomp Dive        (mid-air stomp through an imp onto a 30-deg speed ramp)
+--   7. Boost & Wall Run  (heat builder, boost imp gauntlet, curved wall-run pipe)
+--   8. The Finale        (boost dip, giant loop, sky jump, and the Descent Gate)
+--
+-- Also places Checkpoints, TutorialZones, GoalGate, and invisible "EnemySpawn"
+-- markers (filled by EnemyService). Floats over a lava sea; falling respawns
+-- you at your latest checkpoint.
 
 local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
@@ -2895,12 +3311,15 @@ local ORIGIN = Vector3.new(0, 200, 0)
 local LEVEL_NAME = "HellTestLevel"
 
 local COLOR = {
-	rock = Color3.fromRGB(52, 30, 28),
-	track = Color3.fromRGB(96, 44, 34),
-	slope = Color3.fromRGB(120, 52, 36),
-	loop = Color3.fromRGB(140, 30, 26),
-	pipe = Color3.fromRGB(80, 36, 40),
+	rock = Color3.fromRGB(48, 28, 28),
+	pillar = Color3.fromRGB(36, 22, 24),
+	track = Color3.fromRGB(92, 42, 34),
+	slope = Color3.fromRGB(122, 52, 36),
+	loop = Color3.fromRGB(145, 32, 26),
+	pipe = Color3.fromRGB(78, 34, 42),
+	hurdle = Color3.fromRGB(72, 32, 32),
 	trim = Color3.fromRGB(255, 110, 30),
+	gold = Color3.fromRGB(255, 195, 80),
 	lava = Color3.fromRGB(255, 85, 20),
 }
 
@@ -2924,7 +3343,7 @@ end
 
 -- A plank whose top surface runs from a to b. upHint says which side is "up".
 local function plank(parent: Instance, a: Vector3, b: Vector3, upHint: Vector3, width: number, thickness: number, props)
-	local f = (b - a)
+	local f = b - a
 	local len = f.Magnitude
 	f = f.Unit
 	local lateral = f:Cross(upHint).Unit
@@ -2953,6 +3372,60 @@ local function arc(pts: { Vector2 }, cx: number, cy: number, r: number, a0: numb
 	end
 end
 
+-- Points on a convex arc (a crest / hill top) around center (cx, cy), angles in degrees.
+-- At a = 0 the tangent is flat (+X); positive angles curve smoothly downward.
+local function crestArc(pts: { Vector2 }, cx: number, cy: number, r: number, a0: number, a1: number, n: number)
+	for i = 0, n do
+		local a = math.rad(a0 + (a1 - a0) * i / n)
+		table.insert(pts, Vector2.new(cx + r * math.sin(a), cy + r * math.cos(a)))
+	end
+end
+
+local function strip(parent: Instance, from: Vector3, to: Vector3, width: number, color: Color3?)
+	-- Glowing floor markings. CanQuery = false so the controller ignores them.
+	local d = to - from
+	if d.Magnitude < 0.05 then
+		return
+	end
+	newPart(parent, {
+		Name = "Marker",
+		Size = Vector3.new(width, 0.2, d.Magnitude),
+		CFrame = CFrame.lookAt((from + to) / 2 + Vector3.new(0, 0.1, 0), to + Vector3.new(0, 0.1, 0)),
+		Material = Enum.Material.Neon,
+		Color = color or COLOR.trim,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+end
+
+-- Flat track deck with glowing side trim strips.
+local function deck(parent: Instance, name: string, x0: number, x1: number, yTop: number, zCenter: number, width: number, thickness: number?)
+	local th = thickness or 6
+	local len = x1 - x0
+	local part = newPart(parent, {
+		Name = name,
+		Size = Vector3.new(len, th, width),
+		Position = W((x0 + x1) / 2, yTop - th / 2, zCenter),
+		Color = COLOR.track,
+	})
+	local halfW = width / 2 - 0.8
+	strip(parent, W(x0, yTop, zCenter - halfW), W(x1, yTop, zCenter - halfW), 0.8)
+	strip(parent, W(x0, yTop, zCenter + halfW), W(x1, yTop, zCenter + halfW), 0.8)
+	return part
+end
+
+-- Glowing neon chevron arrows pointing in +X along a flat surface.
+local function chevrons(parent: Instance, xStart: number, yTop: number, zCenter: number, count: number, spacing: number, color: Color3?)
+	local c = color or COLOR.gold
+	for i = 0, count - 1 do
+		local x = xStart + i * spacing
+		strip(parent, W(x - 4, yTop, zCenter - 4.5), W(x + 2, yTop, zCenter), 1.0, c)
+		strip(parent, W(x - 4, yTop, zCenter + 4.5), W(x + 2, yTop, zCenter), 1.0, c)
+	end
+end
+
+-- Floating world sign (supplements the HUD tutorial banner).
 local function sign(parent: Instance, position: Vector3, text: string)
 	local post = newPart(parent, {
 		Name = "Sign",
@@ -2964,9 +3437,9 @@ local function sign(parent: Instance, position: Vector3, text: string)
 		CanTouch = false,
 	})
 	local gui = Instance.new("BillboardGui")
-	gui.Size = UDim2.fromOffset(320, 60)
+	gui.Size = UDim2.fromOffset(340, 62)
 	gui.AlwaysOnTop = false
-	gui.MaxDistance = 400
+	gui.MaxDistance = 360
 	gui.LightInfluence = 0
 	gui.Parent = post
 	local label = Instance.new("TextLabel")
@@ -2974,28 +3447,13 @@ local function sign(parent: Instance, position: Vector3, text: string)
 	label.BackgroundTransparency = 1
 	label.Font = Enum.Font.GothamBlack
 	label.TextScaled = true
-	label.TextColor3 = Color3.fromRGB(255, 200, 140)
+	label.TextColor3 = Color3.fromRGB(255, 210, 150)
 	label.TextStrokeTransparency = 0.2
 	label.Text = text
 	label.Parent = gui
 end
 
-local function strip(parent: Instance, from: Vector3, to: Vector3, width: number)
-	-- Glowing floor markings. CanQuery = false so the controller ignores them.
-	local d = to - from
-	newPart(parent, {
-		Name = "Marker",
-		Size = Vector3.new(width, 0.2, d.Magnitude),
-		CFrame = CFrame.lookAt((from + to) / 2 + Vector3.new(0, 0.1, 0), to + Vector3.new(0, 0.1, 0)),
-		Material = Enum.Material.Neon,
-		Color = COLOR.trim,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
-end
-
--- Invisible marker; EnemyService spawns an enemy here. Move these around in Studio.
+-- Invisible marker; EnemyService spawns an enemy here.
 local function enemySpawn(parent: Instance, position: Vector3, patrol: Vector3?, patrolSpeed: number?)
 	local marker = newPart(parent, {
 		Name = "EnemySpawn",
@@ -3016,18 +3474,204 @@ local function enemySpawn(parent: Instance, position: Vector3, patrol: Vector3?,
 	return marker
 end
 
-local function buildLoop(parent: Instance, cx: number, radius: number, zStart: number, zEnd: number)
-	local segments = 48
-	local width = 12
+-- Invisible box volume for HUD tutorial stage prompts.
+local function tutorialZone(
+	parent: Instance,
+	order: number,
+	title: string,
+	hint: string,
+	x0: number,
+	x1: number,
+	yMin: number,
+	yMax: number,
+	zMin: number,
+	zMax: number
+)
+	local zone = newPart(parent, {
+		Name = string.format("Zone%d", order),
+		Size = Vector3.new(x1 - x0, yMax - yMin, zMax - zMin),
+		Position = W((x0 + x1) / 2, (yMin + yMax) / 2, (zMin + zMax) / 2),
+		Transparency = 1,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	zone:SetAttribute("ZoneOrder", order)
+	zone:SetAttribute("ZoneTitle", title)
+	zone:SetAttribute("ZoneHint", hint)
+	return zone
+end
+
+-- Glowing obsidian checkpoint arch; lights up cyan when crossed.
+local function buildCheckpoint(parent: Instance, index: number, label: string, x: number, yFloor: number, zCenter: number, width: number)
 	local folder = Instance.new("Folder")
-	folder.Name = "Loop"
+	folder.Name = string.format("Checkpoint%d", index)
+	folder:SetAttribute("CheckpointIndex", index)
+	folder:SetAttribute("CheckpointLabel", label)
+	folder.Parent = parent
+
+	local halfW = width / 2 + 1
+	local h = 22
+	for _, side in { -1, 1 } do
+		local pz = zCenter + side * halfW
+		newPart(folder, {
+			Name = "Pillar",
+			Size = Vector3.new(3.5, h, 3.5),
+			Position = W(x, yFloor + h / 2, pz),
+			Color = COLOR.pillar,
+			CanCollide = false,
+			CanQuery = false,
+			CanTouch = false,
+		})
+		local accent = newPart(folder, {
+			Name = "Beacon",
+			Size = Vector3.new(4.1, h - 2, 1.2),
+			Position = W(x, yFloor + h / 2, pz),
+			Material = Enum.Material.Neon,
+			Color = COLOR.trim,
+			CanCollide = false,
+			CanQuery = false,
+			CanTouch = false,
+		})
+		accent:SetAttribute("GlowAccent", true)
+	end
+
+	newPart(folder, {
+		Name = "Crossbar",
+		Size = Vector3.new(3.5, 3, width + 5.5),
+		Position = W(x, yFloor + h + 1, zCenter),
+		Color = COLOR.pillar,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	local barGlow = newPart(folder, {
+		Name = "ArchGlow",
+		Size = Vector3.new(4.1, 1.1, width + 2),
+		Position = W(x, yFloor + h - 0.5, zCenter),
+		Material = Enum.Material.Neon,
+		Color = COLOR.trim,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	barGlow:SetAttribute("GlowAccent", true)
+
+	local triggerPos = W(x, yFloor + 16, zCenter)
+	local trigger = newPart(folder, {
+		Name = "Trigger",
+		Size = Vector3.new(16, 36, width + 12),
+		CFrame = CFrame.lookAt(triggerPos, triggerPos + Vector3.xAxis),
+		Transparency = 1,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	trigger:SetAttribute("SpawnPosition", W(x, yFloor + 4, zCenter))
+	return folder
+end
+
+-- Monumental finish gate at the end of the tutorial course.
+local function buildGoalGate(parent: Instance, x: number, yFloor: number, zCenter: number, width: number)
+	local folder = Instance.new("Folder")
+	folder.Name = "GoalGate"
+	folder.Parent = parent
+
+	local halfW = width / 2
+	local h = 44
+	for _, side in { -1, 1 } do
+		local pz = zCenter + side * halfW
+		newPart(folder, {
+			Name = "Monolith",
+			Size = Vector3.new(8, h, 8),
+			Position = W(x, yFloor + h / 2, pz),
+			Color = COLOR.pillar,
+		})
+		-- Horn spire crowning each monolith
+		newPart(folder, {
+			Name = "Spire",
+			Size = Vector3.new(5, 16, 5),
+			CFrame = CFrame.new(W(x, yFloor + h + 6, pz + side * 2)) * CFrame.Angles(side * 0.25, 0, 0),
+			Color = COLOR.rock,
+		})
+		local vein = newPart(folder, {
+			Name = "Vein",
+			Size = Vector3.new(8.6, h - 4, 2),
+			Position = W(x, yFloor + h / 2, pz),
+			Material = Enum.Material.Neon,
+			Color = COLOR.trim,
+			CanCollide = false,
+			CanQuery = false,
+			CanTouch = false,
+		})
+		vein:SetAttribute("GlowAccent", true)
+	end
+
+	newPart(folder, {
+		Name = "Crown",
+		Size = Vector3.new(9, 7, width + 10),
+		Position = W(x, yFloor + h + 1, zCenter),
+		Color = COLOR.pillar,
+	})
+	local crownGlow = newPart(folder, {
+		Name = "CrownGlow",
+		Size = Vector3.new(9.6, 2.2, width + 4),
+		Position = W(x, yFloor + h - 2.5, zCenter),
+		Material = Enum.Material.Neon,
+		Color = COLOR.trim,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	crownGlow:SetAttribute("GlowAccent", true)
+
+	local curtain = newPart(folder, {
+		Name = "PortalCurtain",
+		Size = Vector3.new(1.2, h - 4, width - 6),
+		Position = W(x, yFloor + (h - 4) / 2, zCenter),
+		Material = Enum.Material.Neon,
+		Color = COLOR.trim,
+		Transparency = 0.68,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	curtain:SetAttribute("GlowAccent", true)
+
+	local triggerPos = W(x + 2, yFloor + 55, zCenter)
+	newPart(folder, {
+		Name = "Trigger",
+		Size = Vector3.new(28, 120, width + 24),
+		CFrame = CFrame.lookAt(triggerPos, triggerPos + Vector3.xAxis),
+		Transparency = 1,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	sign(folder, W(x - 10, yFloor + h + 12, zCenter), "THE DESCENT GATE — FINISH")
+	return folder
+end
+
+local function buildLoop(
+	parent: Instance,
+	name: string,
+	cx: number,
+	yBase: number,
+	radius: number,
+	zStart: number,
+	zEnd: number,
+	segments: number,
+	width: number
+)
+	local folder = Instance.new("Folder")
+	folder.Name = name
 	folder.Parent = parent
 
 	local function point(theta: number): Vector3
 		-- Ease the sideways shift in and out so you enter and leave the loop straight
 		local s = theta / (2 * math.pi)
 		local z = zStart + (zEnd - zStart) * (3 * s * s - 2 * s * s * s)
-		return W(cx + radius * math.sin(theta), radius - radius * math.cos(theta), z)
+		return W(cx + radius * math.sin(theta), yBase + radius - radius * math.cos(theta), z)
 	end
 
 	for i = 0, segments - 1 do
@@ -3035,7 +3679,7 @@ local function buildLoop(parent: Instance, cx: number, radius: number, zStart: n
 		local t1 = 2 * math.pi * (i + 1) / segments
 		local tm = (t0 + t1) / 2
 		local inward = Vector3.new(-math.sin(tm), math.cos(tm), 0)
-		local p = plank(folder, point(t0), point(t1), inward, width, 1.5, {
+		local p = plank(folder, point(t0), point(t1), inward, width, 1.6, {
 			Name = "LoopSegment",
 			Color = if i % 2 == 0 then COLOR.loop else COLOR.track,
 			Material = Enum.Material.Slate,
@@ -3046,6 +3690,57 @@ local function buildLoop(parent: Instance, cx: number, radius: number, zStart: n
 	end
 end
 
+-- Decorative volcanic monoliths rising out of the lava sea for depth & scale.
+local function buildScenery(parent: Instance)
+	local folder = Instance.new("Folder")
+	folder.Name = "Scenery"
+	folder.Parent = parent
+
+	local pillars = {
+		{ 60, -52, 18, 220 },
+		{ 140, 56, 22, 240 },
+		{ 390, -60, 24, 250 },
+		{ 520, 62, 20, 210 },
+		{ 720, -64, 26, 230 },
+		{ 940, 76, 24, 240 },
+		{ 1140, -52, 22, 220 },
+		{ 1290, 74, 26, 230 },
+		{ 1540, -56, 24, 240 },
+		{ 1650, 76, 22, 250 },
+		{ 1870, -62, 26, 220 },
+		{ 2040, 74, 24, 230 },
+		{ 2260, 78, 28, 240 },
+		{ 2520, -68, 24, 230 },
+		{ 2740, 86, 26, 250 },
+		{ 2940, -48, 22, 260 },
+		{ 2960, 92, 22, 260 },
+	}
+	for i, spec in pillars do
+		local x, z, size, h = spec[1], spec[2], spec[3], spec[4]
+		local yBase = -110
+		newPart(folder, {
+			Name = "Spire" .. i,
+			Size = Vector3.new(size, h, size),
+			Position = W(x, yBase + h / 2, z),
+			Color = COLOR.pillar,
+			CanCollide = false,
+			CanQuery = false,
+			CanTouch = false,
+		})
+		-- Glowing lava band near the base of every spire
+		newPart(folder, {
+			Name = "LavaRing" .. i,
+			Size = Vector3.new(size + 1, 2.5, size + 1),
+			Position = W(x, yBase + 18 + (i % 3) * 14, z),
+			Material = Enum.Material.Neon,
+			Color = COLOR.trim,
+			CanCollide = false,
+			CanQuery = false,
+			CanTouch = false,
+		})
+	end
+end
+
 local function setupLighting()
 	Lighting.ClockTime = 0
 	Lighting.Brightness = 1.5
@@ -3053,12 +3748,12 @@ local function setupLighting()
 	Lighting.OutdoorAmbient = Color3.fromRGB(140, 60, 45)
 	Lighting.EnvironmentDiffuseScale = 0.3
 	local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or Instance.new("Atmosphere")
-	atmosphere.Density = 0.38
-	atmosphere.Offset = 0.1
+	atmosphere.Density = 0.34
+	atmosphere.Offset = 0.12
 	atmosphere.Color = Color3.fromRGB(255, 120, 70)
 	atmosphere.Decay = Color3.fromRGB(110, 25, 15)
 	atmosphere.Glare = 0.3
-	atmosphere.Haze = 2.2
+	atmosphere.Haze = 2.0
 	atmosphere.Parent = Lighting
 	if not Lighting:FindFirstChild("HellBloom") then
 		local bloom = Instance.new("BloomEffect")
@@ -3073,36 +3768,44 @@ end
 function LevelBuilder.Build(): Folder
 	local existing = Workspace:FindFirstChild(LEVEL_NAME)
 	if existing then
-		Workspace:SetAttribute("MomentumKillY", ORIGIN.Y - 30)
+		Workspace:SetAttribute("MomentumKillY", ORIGIN.Y - 90)
 		return existing
 	end
 
 	local level = Instance.new("Folder")
 	level.Name = LEVEL_NAME
 
-	-- Ground slab and lava sea
-	newPart(level, {
-		Name = "Floor",
-		Size = Vector3.new(1000, 4, 260),
-		Position = W(420, -2, 0),
-		Color = COLOR.track,
-	})
-	newPart(level, {
-		Name = "LavaSea",
-		Size = Vector3.new(2048, 1, 2048),
-		Position = W(420, -45, 0),
-		Material = Enum.Material.Neon,
-		Color = COLOR.lava,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
-	strip(level, W(-60, 0, -15), W(920, 0, -15), 1)
-	strip(level, W(-60, 0, 15), W(920, 0, 15), 1)
+	local zones = Instance.new("Folder")
+	zones.Name = "TutorialZones"
+	zones.Parent = level
 
-	-- 1. Start platform and the drop: 20 degree slope easing into the floor
-	newPart(level, { Name = "StartBlock", Size = Vector3.new(60, 40, 30), Position = W(-30, 20, 0) })
-	local spawnPos = W(-45, 40.5, 0)
+	local checkpoints = Instance.new("Folder")
+	checkpoints.Name = "Checkpoints"
+	checkpoints.Parent = level
+
+	local spawns = Instance.new("Folder")
+	spawns.Name = "EnemySpawns"
+	spawns.Parent = level
+
+	-- Molten lava sea beneath the entire 3000+ stud course (two <=2048-stud tiles)
+	for _, cx in { 520, 2568 } do
+		newPart(level, {
+			Name = "LavaSea",
+			Size = Vector3.new(2048, 1, 1400),
+			Position = W(cx, -108, 10),
+			Material = Enum.Material.Neon,
+			Color = COLOR.lava,
+			CanCollide = false,
+			CanQuery = false,
+			CanTouch = false,
+		})
+	end
+
+	-- =========================================================================
+	-- STAGE 1: RUN & JUMP (X = -45..340, Y = 80, Z = 0)
+	-- =========================================================================
+	deck(level, "Stage1Runway", -45, 198, 80, 0, 36, 8)
+	local spawnPos = W(-25, 80.5, 0)
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "MomentumSpawn"
 	spawn.Size = Vector3.new(8, 1, 8)
@@ -3114,67 +3817,281 @@ function LevelBuilder.Build(): Folder
 	spawn.Color = COLOR.trim
 	spawn.Parent = level
 
+	-- Decorative start gate arch
+	for _, side in { -1, 1 } do
+		newPart(level, {
+			Name = "StartPillar",
+			Size = Vector3.new(5, 28, 5),
+			Position = W(5, 94, side * 19),
+			Color = COLOR.pillar,
+			CanCollide = false,
+			CanQuery = false,
+		})
+	end
+	newPart(level, {
+		Name = "StartBeam",
+		Size = Vector3.new(5, 4, 43),
+		Position = W(5, 109, 0),
+		Color = COLOR.pillar,
+		CanCollide = false,
+		CanQuery = false,
+	})
+	sign(level, W(5, 117, 0), "CIRCLE 0: THE DESCENT GATE")
+	chevrons(level, 25, 80, 0, 3, 28)
+
+	-- Low step hurdle (tap Space)
+	newPart(level, {
+		Name = "LowHurdle",
+		Size = Vector3.new(6, 4.5, 36),
+		Position = W(149, 82.25, 0),
+		Color = COLOR.hurdle,
+	})
+	strip(level, W(146, 84.5, -17), W(146, 84.5, 17), 1.0, COLOR.gold)
+	sign(level, W(149, 91, 0), "TAP SPACE TO HOP")
+
+	-- Gap 1 (26 studs: X = 198..224) + Stage 1 landing deck
+	deck(level, "Stage1Landing", 224, 340, 80, 0, 36, 8)
+
+	-- Higher hurdle (hold Space for full jump height)
+	newPart(level, {
+		Name = "HighHurdle",
+		Size = Vector3.new(6, 8.5, 36),
+		Position = W(275, 84.25, 0),
+		Color = COLOR.hurdle,
+	})
+	strip(level, W(272, 88.5, -17), W(272, 88.5, 17), 1.0, COLOR.gold)
+	sign(level, W(275, 95, 0), "HOLD SPACE TO JUMP HIGHER")
+
+	buildCheckpoint(checkpoints, 1, "ROLL & MOMENTUM", 324, 80, 0, 36)
+	tutorialZone(
+		zones,
+		1,
+		"STAGE 1 · RUN & JUMP",
+		"Hold W to build speed. Tap Space for a short hop, hold Space to jump higher.",
+		-60,
+		324,
+		50,
+		150,
+		-30,
+		30
+	)
+
+	-- =========================================================================
+	-- STAGE 2: ROLL & DOWNHILL MOMENTUM (X = 340..782, Y = 80 -> 0, Z = 0)
+	-- =========================================================================
+	local dropEndX: number
 	do
-		local r, slope = 40, 20
-		local arcStartY = r - r * math.cos(math.rad(slope))
-		local straightRun = (40 - arcStartY) / math.tan(math.rad(slope))
-		local cx = straightRun + r * math.sin(math.rad(slope))
-		local pts = { Vector2.new(0, 40) }
-		arc(pts, cx, r, r, -slope, 0, 8)
-		table.insert(pts, Vector2.new(cx + 6, 0))
-		profile(level, pts, 0, 30, 3, { Name = "Drop", Color = COLOR.slope })
-		sign(level, W(20, 46, 0), "THE DROP: hold W to build speed")
+		local slopeDeg = 24
+		local slopeRad = math.rad(slopeDeg)
+		local crestR = 22
+		local botR = 36
+		local pts = {}
+		crestArc(pts, 340, 80 - crestR, crestR, 0, slopeDeg, 6)
+		local crestEnd = pts[#pts]
+		local botStartY = botR - botR * math.cos(slopeRad)
+		local dxStraight = (crestEnd.Y - botStartY) / math.tan(slopeRad)
+		local botCx = crestEnd.X + dxStraight + botR * math.sin(slopeRad)
+		arc(pts, botCx, botR, botR, -slopeDeg, 0, 10)
+		dropEndX = pts[#pts].X
+		profile(level, pts, 0, 36, 4, { Name = "TutorialDrop", Color = COLOR.slope })
+		sign(level, W(375, 84, 0), "HOLD Q DOWNHILL TO ROLL (2x SPEED)")
 	end
 
-	-- 2. Hill: 15 degrees up, plateau, 30 degrees down
+	-- Valley runway with two patrolling imps to bowl right through
+	deck(level, "Stage2Valley", dropEndX, 620, 0, 0, 36, 6)
+	enemySpawn(spawns, W(570, 4, -5), Vector3.new(0, 0, 7), 1.2)
+	enemySpawn(spawns, W(596, 4, 5), Vector3.new(0, 0, -7), 1.2)
+	sign(level, W(582, 13, 0), "ROLL THROUGH IMPS TO SMASH THEM")
+
+	-- Smooth momentum hill (16 deg up, rounded crest at Y = 20, 20 deg down)
+	local hillEndX: number
 	do
-		local h = 60 * math.tan(math.rad(15))
-		local down = h / math.tan(math.rad(30))
-		profile(level, {
-			Vector2.new(200, 0),
-			Vector2.new(260, h),
-			Vector2.new(300, h),
-			Vector2.new(300 + down, 0),
-		}, 0, 30, 4, { Name = "Hill", Color = COLOR.slope })
-		newPart(level, { Name = "HillCore", Size = Vector3.new(36, h - 1, 30), Position = W(280, (h - 1) / 2, 0) })
-		sign(level, W(280, h + 10, 0), "HILL: slopes trade speed for height")
+		local upDeg, downDeg = 16, 20
+		local upRad, downRad = math.rad(upDeg), math.rad(downDeg)
+		local botR, crestR, peakY = 28, 24, 20
+		local pts = {}
+		arc(pts, 620, botR, botR, 0, upDeg, 6)
+		local upEnd = pts[#pts]
+		local crestCy = peakY - crestR
+		local crestStartY = crestCy + crestR * math.cos(upRad)
+		local dxUp = (crestStartY - upEnd.Y) / math.tan(upRad)
+		local crestCx = upEnd.X + dxUp + crestR * math.sin(upRad)
+		crestArc(pts, crestCx, crestCy, crestR, -upDeg, downDeg, 8)
+		local crestEnd = pts[#pts]
+		local botDownStartY = botR - botR * math.cos(downRad)
+		local dxDown = (crestEnd.Y - botDownStartY) / math.tan(downRad)
+		local botDownCx = crestEnd.X + dxDown + botR * math.sin(downRad)
+		arc(pts, botDownCx, botR, botR, -downDeg, 0, 6)
+		hillEndX = pts[#pts].X
+		profile(level, pts, 0, 36, 4, { Name = "MomentumHill", Color = COLOR.slope })
+		newPart(level, {
+			Name = "HillCore",
+			Size = Vector3.new(44, peakY - 3, 35),
+			Position = W(crestCx, (peakY - 3) / 2, 0),
+			Color = COLOR.rock,
+		})
 	end
 
-	-- 3. Loop: enter on the centre line, exit 16 studs to the right
-	do
-		local cx, r = 430, 26
-		buildLoop(level, cx, r, 0, 16)
-		strip(level, W(360, 0, 0), W(428, 0, 0), 2)
-		sign(level, W(400, 14, -10), "LOOP: 85+ speed, or spin-dash / boost in")
-	end
+	-- Stage 3 floor begins right at hillEndX so there is zero seam
+	deck(level, "Stage3Arena", hillEndX, 1070, 0, 8, 52, 6)
+	buildCheckpoint(checkpoints, 2, "SPIN-DASH & LOOP", 782, 0, 0, 36)
+	tutorialZone(
+		zones,
+		2,
+		"STAGE 2 · ROLL & MOMENTUM",
+		"Hold Q while moving downhill to curl into a ball. Rolling doubles downhill speed and smashes imps!",
+		324,
+		782,
+		-20,
+		130,
+		-30,
+		30
+	)
 
-	-- 4. Launch ramp on the loop's exit lane
+	-- =========================================================================
+	-- STAGE 3: SPIN-DASH & FIRST LOOP (X = 782..1070, Y = 0, Z = 0 -> 16)
+	-- =========================================================================
+	chevrons(level, 810, 0, 0, 3, 20, COLOR.gold)
+	strip(level, W(868, 0, 0), W(933, 0, 0), 2.0, COLOR.trim)
+	sign(level, W(835, 13, 0), "STOPPED? HOLD Q TO SPIN-DASH (TAP SPACE TO REV)")
+
+	buildLoop(level, "TutorialLoop", 935, 0, 24, 0, 16, 48, 14)
+	sign(level, W(935, 56, 8), "THE LOOP: 90+ SPEED OR SPIN-DASH")
+
+	chevrons(level, 985, 0, 16, 2, 22, COLOR.gold)
+	buildCheckpoint(checkpoints, 3, "AIR DASH", 1045, 0, 16, 36)
+	tutorialZone(
+		zones,
+		3,
+		"STAGE 3 · SPIN-DASH & LOOP",
+		"Hold Q while slow to charge a Spin-Dash (tap Space to rev), then release to blast through the loop!",
+		782,
+		1045,
+		-20,
+		90,
+		-26,
+		42
+	)
+
+	-- =========================================================================
+	-- STAGE 4: AIR DASH & AIR CONTROL (X = 1070..1465, Y = 0, Z = 16 -> 8)
+	-- =========================================================================
 	do
 		local pts = {}
-		arc(pts, 560, 30, 30, 0, 30, 6)
+		arc(pts, 1070, 32, 32, 0, 22, 6)
 		local last = pts[#pts]
-		table.insert(pts, last + Vector2.new(math.cos(math.rad(30)), math.sin(math.rad(30))) * 16)
-		profile(level, pts, 16, 24, 2, { Name = "LaunchRamp", Color = COLOR.slope })
-		sign(level, W(570, 22, 16), "LAUNCH RAMP")
+		table.insert(pts, last + Vector2.new(math.cos(math.rad(22)), math.sin(math.rad(22))) * 24)
+		profile(level, pts, 16, 30, 3, { Name = "AirDashRamp", Color = COLOR.slope })
+		sign(level, W(1095, 22, 16), "JUMP + TAP SPACE MID-AIR TO AIR DASH")
 	end
 
-	-- 5. End quarter pipe: curve up into a vertical wall, then fall back in
+	-- 90-stud chasm -> Mid Island (X = 1194..1274, Z = 16)
+	deck(level, "AirDashIsland", 1194, 1274, 0, 16, 34, 6)
+	chevrons(level, 1216, 0, 16, 2, 24, COLOR.gold)
+
+	-- 62-stud offset gap shifting from Z = 16 -> Z = 8 to practice air steering
+	deck(level, "Stage4Arrival", 1336, 1465, 0, 8, 36, 6)
+	sign(level, W(1305, 16, 12), "STEER LEFT IN MID-AIR + AIR DASH")
+	strip(level, W(1456, 0, -9), W(1456, 0, 25), 1.8, COLOR.gold)
+
+	buildCheckpoint(checkpoints, 4, "HOMING CHAIN", 1395, 0, 8, 36)
+	tutorialZone(
+		zones,
+		4,
+		"STAGE 4 · AIR DASH & STEERING",
+		"Jump off the ramp and tap Space again in mid-air to Air Dash! Hold A/D in flight to steer.",
+		1045,
+		1395,
+		-40,
+		90,
+		-20,
+		44
+	)
+
+	-- =========================================================================
+	-- STAGE 5: HOMING ATTACK CHAIN (X = 1395..1780, Y = 0 -> 20, Z = 8)
+	-- =========================================================================
+	enemySpawn(spawns, W(1495, 9, 8))
+	enemySpawn(spawns, W(1533, 15, 8))
+	enemySpawn(spawns, W(1571, 21, 8))
+	enemySpawn(spawns, W(1609, 25, 8))
+	sign(level, W(1495, 22, 8), "LOCK ON -> TAP SPACE TO HOMING ATTACK")
+
+	deck(level, "HomingTerrace", 1638, 1780, 20, 8, 38, 6)
+	chevrons(level, 1660, 20, 8, 2, 24, COLOR.gold)
+
+	buildCheckpoint(checkpoints, 5, "STOMP DIVE", 1715, 20, 8, 38)
+	tutorialZone(
+		zones,
+		5,
+		"STAGE 5 · HOMING ATTACK",
+		"Jump toward the Cinder Imps. When the red reticle locks on, tap Space to home in and chain across!",
+		1395,
+		1715,
+		-30,
+		90,
+		-20,
+		36
+	)
+
+	-- =========================================================================
+	-- STAGE 6: STOMP DIVE & SLOPE LAUNCH (X = 1715..1975, Y = 20 -> -40, Z = 8)
+	-- =========================================================================
+	enemySpawn(spawns, W(1810, 6, 8))
+	sign(level, W(1795, 30, 8), "JUMP OUT, THEN PRESS Q MID-AIR TO STOMP!")
+
+	local stompEndX: number
 	do
-		local pts = {}
-		arc(pts, 760, 24, 24, 0, 90, 12)
-		table.insert(pts, Vector2.new(784, 150))
-		profile(level, pts, 0, 120, 3, { Name = "QuarterPipe", Color = COLOR.pipe })
-		-- Tall enough that you normally peel off and fall back in; if you boost
-		-- over the top you land on the ledge behind it.
-		newPart(level, { Name = "QuarterPipeBack", Size = Vector3.new(40, 150, 120), Position = W(807, 75, 0) })
-		sign(level, W(740, 30, 0), "QUARTER PIPE: go vertical, come back down")
+		local slopeDeg = 30
+		local slopeRad = math.rad(slopeDeg)
+		local botR = 32
+		local botCy = -40 + botR
+		local botStartY = botCy - botR * math.cos(slopeRad)
+		local startX, startY = 1780, -2
+		local dx = (startY - botStartY) / math.tan(slopeRad)
+		local botCx = startX + dx + botR * math.sin(slopeRad)
+		local pts = { Vector2.new(startX, startY) }
+		arc(pts, botCx, botCy, botR, -slopeDeg, 0, 10)
+		stompEndX = pts[#pts].X
+		profile(level, pts, 8, 38, 4, { Name = "StompRamp", Color = COLOR.slope })
+		-- Glowing target bar on the slope directly underneath the stomp imp
+		local targetY = startY - (1810 - startX) * math.tan(slopeRad)
+		strip(level, W(1810, targetY + 0.4, -7), W(1810, targetY + 0.4, 23), 2.5, COLOR.gold)
 	end
 
-	-- 6. Wall-run pipe along the left side (negative Z) of the whole course
+	-- Valley floor out of the stomp ramp
+	deck(level, "Stage6Exit", stompEndX, 1975, -40, 8, 48, 6)
+	buildCheckpoint(checkpoints, 6, "BOOST & WALL RUN", 1945, -40, 8, 48)
+	tutorialZone(
+		zones,
+		6,
+		"STAGE 6 · STOMP",
+		"Jump off the ledge and press Q in mid-air to STOMP straight down onto the ramp for an instant speed launch!",
+		1715,
+		1945,
+		-60,
+		70,
+		-24,
+		40
+	)
+
+	-- =========================================================================
+	-- STAGE 7: HEAT, BOOST & WALL-RUN CANYON (X = 1975..2475, Y = -40, Z = 8)
+	-- =========================================================================
+	deck(level, "BoostCanyonFloor", 1975, 2475, -40, 8, 48, 6)
+	chevrons(level, 2005, -40, 8, 5, 28, COLOR.gold)
+	sign(level, W(2080, -25, 8), "HOLD SHIFT TO BOOST THROUGH IMPS (NEEDS HEAT)")
+
+	-- Center boost gauntlet: plow straight through while boosting!
+	enemySpawn(spawns, W(2175, -36, 8), Vector3.new(0, 0, 8), 1.1)
+	enemySpawn(spawns, W(2235, -36, 8), Vector3.new(0, 0, -8), 1.1)
+	enemySpawn(spawns, W(2295, -36, 8), Vector3.new(0, 0, 8), 1.1)
+
+	-- Curved wall-run pipe seamlessly joined to the left edge (Z = -16) of the canyon floor
 	do
-		local x0, x1 = 150, 700
+		local x0, x1 = 2065, 2405
 		local xm, len = (x0 + x1) / 2, x1 - x0
-		local cz, cy, r = -70, 20, 20
+		local cz, cy, r = -16, -40 + 20, 20
 		local function at(a: number): Vector3
 			local rad = math.rad(a)
 			return W(xm, cy - r * math.cos(rad), cz - r * math.sin(rad))
@@ -3186,33 +4103,101 @@ function LevelBuilder.Build(): Folder
 			local inward = (W(xm, cy, cz) - (p0 + p1) / 2).Unit
 			plank(level, p0, p1, inward, len, 3, { Name = "WallRunCurve", Color = COLOR.pipe })
 		end
-		plank(level, at(90), W(xm, 80, cz - r), Vector3.zAxis, len, 3, { Name = "WallRunWall", Color = COLOR.pipe })
-		sign(level, W(180, 20, -50), "WALL RUN: steer left into the curve at speed")
-		strip(level, W(150, 0, -45), W(700, 0, -45), 1)
+		plank(level, at(90), W(xm, 40, cz - r), Vector3.zAxis, len, 3, { Name = "WallRunWall", Color = COLOR.pipe })
+		strip(level, W(x0, -40, -13), W(x1, -40, -13), 1.0, COLOR.gold)
+		sign(level, W(2120, -18, -22), "OR STEER LEFT TO WALL RUN!")
+		enemySpawn(spawns, W(2195, -14, -29), Vector3.new(16, 0, 0), 0.7)
+		enemySpawn(spawns, W(2305, -10, -29), Vector3.new(16, 0, 0), 0.7)
 	end
 
-	-- 7. Enemies
+	buildCheckpoint(checkpoints, 7, "THE FINALE", 2445, -40, 8, 48)
+	tutorialZone(
+		zones,
+		7,
+		"STAGE 7 · HEAT, BOOST & WALL RUN",
+		"Run fast to fill HEAT past the white tick, then hold Shift to BOOST through imps — or steer left to Wall Run!",
+		1945,
+		2445,
+		-60,
+		60,
+		-50,
+		42
+	)
+
+	-- =========================================================================
+	-- STAGE 8: THE FINALE — DIP, GIANT LOOP, SKY JUMP & DESCENT GATE
+	-- (X = 2475..3025, Y = -40 -> -52 -> -40, Z = 8 -> 24)
+	-- =========================================================================
+	local dipEndX: number
 	do
-		local spawns = Instance.new("Folder")
-		spawns.Name = "EnemySpawns"
-		spawns.Parent = level
-		-- Ground imps after the drop: roll, boost or jump through them, don't just run in
-		enemySpawn(spawns, W(160, 4, -6), Vector3.new(0, 0, 6), 1.2)
-		enemySpawn(spawns, W(178, 4, 6), Vector3.new(0, 0, -6), 1.2)
-		-- One hovering over the hill top: jump and home in
-		enemySpawn(spawns, W(280, 32, 0))
-		-- Homing chain off the launch ramp: home, bounce, home, bounce...
-		enemySpawn(spawns, W(625, 30, 16))
-		enemySpawn(spawns, W(660, 38, 16))
-		enemySpawn(spawns, W(695, 32, 16))
-		-- Guards in front of the quarter pipe
-		enemySpawn(spawns, W(735, 4, 0), Vector3.new(0, 0, 14), 0.8)
-		-- Along the wall run, for homing off the wall
-		enemySpawn(spawns, W(420, 34, -78), Vector3.new(20, 0, 0), 0.6)
-		enemySpawn(spawns, W(540, 40, -78), Vector3.new(20, 0, 0), 0.6)
-		sign(level, W(625, 44, 16), "HOMING CHAIN: jump off the ramp, tap jump on each imp")
+		local slopeDeg = 14
+		local slopeRad = math.rad(slopeDeg)
+		local crestR, botR = 24, 28
+		local pts = {}
+		crestArc(pts, 2475, -40 - crestR, crestR, 0, slopeDeg, 5)
+		local crestEnd = pts[#pts]
+		local botCy = -52 + botR
+		local botStartY = botCy - botR * math.cos(slopeRad)
+		local dx = (crestEnd.Y - botStartY) / math.tan(slopeRad)
+		local botCx = crestEnd.X + dx + botR * math.sin(slopeRad)
+		arc(pts, botCx, botCy, botR, -slopeDeg, 0, 6)
+		dipEndX = pts[#pts].X
+		profile(level, pts, 8, 48, 4, { Name = "FinaleDip", Color = COLOR.slope })
 	end
 
+	-- Giant Loop Arena Floor
+	deck(level, "FinaleLoopFloor", dipEndX, 2735, -52, 16, 56, 6)
+	chevrons(level, dipEndX + 10, -52, 8, 3, 20, COLOR.gold)
+	strip(level, W(dipEndX + 20, -52, 8), W(2643, -52, 8), 2.2, COLOR.trim)
+	buildLoop(level, "FinaleLoop", 2645, -52, 28, 8, 24, 52, 14)
+	sign(level, W(2645, 16, 16), "BOOST THROUGH THE GIANT LOOP!")
+
+	-- Finale Sky-Jump Ramp on exit lane (Z = 24)
+	do
+		local pts = {}
+		arc(pts, 2735, -52 + 32, 32, 0, 25, 6)
+		local last = pts[#pts]
+		table.insert(pts, last + Vector2.new(math.cos(math.rad(25)), math.sin(math.rad(25))) * 22)
+		profile(level, pts, 24, 32, 3, { Name = "FinaleLaunchRamp", Color = COLOR.slope })
+	end
+
+	-- Bonus celebratory aerial imps over the final lava gorge
+	enemySpawn(spawns, W(2798, -28, 24))
+	enemySpawn(spawns, W(2828, -26, 24))
+
+	-- Victory Plaza & The Descent Gate
+	deck(level, "VictoryPlaza", 2843, 3015, -40, 24, 60, 8)
+	chevrons(level, 2858, -40, 24, 2, 22, COLOR.gold)
+	buildGoalGate(level, 2910, -40, 24, 36)
+
+	-- Backstop quarter pipe behind the gate so boosting through doesn't dump you into lava
+	do
+		local pts = {}
+		arc(pts, 2995, -40 + 24, 24, 0, 90, 12)
+		table.insert(pts, Vector2.new(3019, 90))
+		profile(level, pts, 24, 60, 3, { Name = "VictoryQuarterPipe", Color = COLOR.pipe })
+		newPart(level, {
+			Name = "VictoryBackWall",
+			Size = Vector3.new(24, 130, 60),
+			Position = W(3033, 25, 24),
+			Color = COLOR.rock,
+		})
+	end
+
+	tutorialZone(
+		zones,
+		8,
+		"FINALE · FULL THROTTLE",
+		"Hit Shift to BOOST through the Giant Loop, soar off the ramp, and smash through the Descent Gate!",
+		2445,
+		3060,
+		-70,
+		110,
+		-26,
+		66
+	)
+
+	buildScenery(level)
 	setupLighting()
 
 	-- Turn off any other spawns (like the Baseplate template's) so you start here.
@@ -3223,7 +4208,7 @@ function LevelBuilder.Build(): Folder
 	end
 
 	level.Parent = Workspace
-	Workspace:SetAttribute("MomentumKillY", ORIGIN.Y - 30)
+	Workspace:SetAttribute("MomentumKillY", ORIGIN.Y - 90)
 	return level
 end
 
@@ -3291,6 +4276,7 @@ local Hud = require(Momentum:WaitForChild("Hud"))
 local CharacterFx = require(Momentum:WaitForChild("CharacterFx"))
 local InputState = require(Momentum:WaitForChild("InputState"))
 local LockOn = require(Momentum:WaitForChild("LockOn"))
+local TutorialTracker = require(Momentum:WaitForChild("TutorialTracker"))
 
 local player = Players.LocalPlayer
 
@@ -3372,8 +4358,9 @@ local function onCharacter(character: Model)
 	camera:Attach(ctrl, { character, fx.ball })
 
 	local lockOn = LockOn.new(ctrl, player:WaitForChild("PlayerGui"))
+	local tutorial = TutorialTracker.new(ctrl)
 
-	active = { ctrl = ctrl, fx = fx, lockOn = lockOn, character = character }
+	active = { ctrl = ctrl, fx = fx, lockOn = lockOn, tutorial = tutorial, character = character }
 	humanoid.Died:Connect(function()
 		if active and active.character == character then
 			stop()
@@ -3397,11 +4384,16 @@ preSimulation:Connect(function(a, b)
 	local ctrl = active.ctrl
 	if input.respawnRequested then
 		input.respawnRequested = false
-		ctrl:Respawn()
+		if active.tutorial and active.tutorial.finished then
+			active.tutorial:Reset()
+		else
+			ctrl:Respawn()
+		end
 	end
 	local cam = Workspace.CurrentCamera
 	ctrl:Step(dt, if cam then cam.CFrame else CFrame.new())
 	active.lockOn:Update(dt)
+	active.tutorial:Update(dt)
 	ctrl:Apply()
 	active.fx:UpdatePose(dt)
 end)
@@ -3412,7 +4404,7 @@ RunService:BindToRenderStep("MomentumCamera", Enum.RenderPriority.Camera.Value +
 	end
 	camera:Update(dt)
 	active.fx:Update(dt)
-	hud:Update(active.ctrl, dt)
+	hud:Update(active.ctrl, dt, active.tutorial)
 end)
 ]=====])
 end

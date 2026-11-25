@@ -12,6 +12,7 @@ local Hud = require(Momentum:WaitForChild("Hud"))
 local CharacterFx = require(Momentum:WaitForChild("CharacterFx"))
 local InputState = require(Momentum:WaitForChild("InputState"))
 local LockOn = require(Momentum:WaitForChild("LockOn"))
+local TutorialTracker = require(Momentum:WaitForChild("TutorialTracker"))
 
 local player = Players.LocalPlayer
 
@@ -93,8 +94,9 @@ local function onCharacter(character: Model)
 	camera:Attach(ctrl, { character, fx.ball })
 
 	local lockOn = LockOn.new(ctrl, player:WaitForChild("PlayerGui"))
+	local tutorial = TutorialTracker.new(ctrl)
 
-	active = { ctrl = ctrl, fx = fx, lockOn = lockOn, character = character }
+	active = { ctrl = ctrl, fx = fx, lockOn = lockOn, tutorial = tutorial, character = character }
 	humanoid.Died:Connect(function()
 		if active and active.character == character then
 			stop()
@@ -118,11 +120,16 @@ preSimulation:Connect(function(a, b)
 	local ctrl = active.ctrl
 	if input.respawnRequested then
 		input.respawnRequested = false
-		ctrl:Respawn()
+		if active.tutorial and active.tutorial.finished then
+			active.tutorial:Reset()
+		else
+			ctrl:Respawn()
+		end
 	end
 	local cam = Workspace.CurrentCamera
 	ctrl:Step(dt, if cam then cam.CFrame else CFrame.new())
 	active.lockOn:Update(dt)
+	active.tutorial:Update(dt)
 	ctrl:Apply()
 	active.fx:UpdatePose(dt)
 end)
@@ -133,5 +140,5 @@ RunService:BindToRenderStep("MomentumCamera", Enum.RenderPriority.Camera.Value +
 	end
 	camera:Update(dt)
 	active.fx:Update(dt)
-	hud:Update(active.ctrl, dt)
+	hud:Update(active.ctrl, dt, active.tutorial)
 end)
