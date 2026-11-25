@@ -97,19 +97,18 @@ local Config = {
 	EnemyHeatLoss = 0.25, -- heat lost when an enemy hits you
 	HurtInvulnerability = 1.2, -- seconds you can't be hit again
 
-	-- Procedural run cycle (R15)
+	-- Procedural run cycle (R15 and R6)
 	RunCycleWalkSpeed = 20, -- full walk stride by this speed
 	RunCycleRunSpeed = 60, -- full run (knee lift, arm pump, lean) by this speed
 	RunCycleSprintSpeed = 100, -- arms start sweeping back here
 	RunCycleSprintBlend = 50, -- ...and are fully back this much faster
-	RunCycleMinCadence = 1.4, -- steps cycles per second at walking pace
-	RunCycleMaxCadence = 2.45, -- cap so the legs don't strobe at 300 speed
-	RunCycleCadenceSpeed = 30, -- how quickly cadence climbs toward the cap
+	RunCycleMinCadence = 0.5, -- base step cycles per second at slow speeds
+	RunCycleCadencePerSpeed = 0.022, -- extra step cycles per second per stud/s (~2.5 at 90, ~4.2 at 170, ~7.5 at 320)
+	RunCycleMaxCadence = 12, -- high safety cap so extreme speeds don't strobe at 60 FPS
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
 	-- Overdrive: small extras from running top speed (TopSpeed) up to RunCycleOverdriveSpeed,
-	-- so the legs keep up with boosts and slopes. Below TopSpeed nothing changes.
+	-- so the pose keeps up with boosts and slopes. Below TopSpeed nothing changes.
 	RunCycleOverdriveSpeed = 200, -- the extras are fully in by this speed
-	RunCycleOverdriveCadence = 1.0, -- extra step cycles per second (2.45 -> 3.45)
 	RunCycleOverdriveStride = 0.12, -- leg stride grows by up to 12%
 	RunCycleOverdriveLean = 0.4, -- extra forward tilt of the torso by RunCycleOverdriveSpeed, radians
 	RunCycleRunLean = 0.45, -- forward tilt of the torso at full running speed, radians

@@ -976,19 +976,18 @@ local Config = {
 	EnemyHeatLoss = 0.25, -- heat lost when an enemy hits you
 	HurtInvulnerability = 1.2, -- seconds you can't be hit again
 
-	-- Procedural run cycle (R15)
+	-- Procedural run cycle (R15 and R6)
 	RunCycleWalkSpeed = 20, -- full walk stride by this speed
 	RunCycleRunSpeed = 60, -- full run (knee lift, arm pump, lean) by this speed
 	RunCycleSprintSpeed = 100, -- arms start sweeping back here
 	RunCycleSprintBlend = 50, -- ...and are fully back this much faster
-	RunCycleMinCadence = 1.4, -- steps cycles per second at walking pace
-	RunCycleMaxCadence = 2.45, -- cap so the legs don't strobe at 300 speed
-	RunCycleCadenceSpeed = 30, -- how quickly cadence climbs toward the cap
+	RunCycleMinCadence = 0.5, -- base step cycles per second at slow speeds
+	RunCycleCadencePerSpeed = 0.022, -- extra step cycles per second per stud/s (~2.5 at 90, ~4.2 at 170, ~7.5 at 320)
+	RunCycleMaxCadence = 12, -- high safety cap so extreme speeds don't strobe at 60 FPS
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
 	-- Overdrive: small extras from running top speed (TopSpeed) up to RunCycleOverdriveSpeed,
-	-- so the legs keep up with boosts and slopes. Below TopSpeed nothing changes.
+	-- so the pose keeps up with boosts and slopes. Below TopSpeed nothing changes.
 	RunCycleOverdriveSpeed = 200, -- the extras are fully in by this speed
-	RunCycleOverdriveCadence = 1.0, -- extra step cycles per second (2.45 -> 3.45)
 	RunCycleOverdriveStride = 0.12, -- leg stride grows by up to 12%
 	RunCycleOverdriveLean = 0.4, -- extra forward tilt of the torso by RunCycleOverdriveSpeed, radians
 	RunCycleRunLean = 0.45, -- forward tilt of the torso at full running speed, radians
@@ -2235,8 +2234,8 @@ script(f, 'ModuleScript', 'RunCycle', [=====[-- Procedural, speed-driven run cyc
 --   standing  -> idle breathing
 --   0-20      -> walk: short stride, relaxed arms, upright
 --   20-90     -> run: long stride, high knee lift, pumping arms, forward lean, bounce
---   90+       -> sprint: deep lean, arms snapping forward and back, legs at full cadence
---   90-200    -> overdrive: the sprint gets a bit faster, longer and leaner so it keeps up
+--   90+       -> sprint: deep lean, arms snapping forward and back, cadence keeps scaling with speed
+--   90-200    -> overdrive: slightly longer stride and a deeper forward tilt above top speed
 -- In the air it blends to a fall pose. Tuning lives in Config (RunCycle* values).
 
 local Config = require(script.Parent.Config)
@@ -2471,11 +2470,12 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 	local bank = math.clamp((turnRate or 0) * speed * C.RunCycleBank, -C.RunCycleBankMax, C.RunCycleBankMax)
 	self.bank += (bank - self.bank) * (1 - math.exp(-8 * dt))
 	speed = self.speed
-	-- Cadence rises quickly at first, then levels off so top speeds don't strobe
-	local cadence = C.RunCycleMinCadence
-		+ (C.RunCycleMaxCadence - C.RunCycleMinCadence) * (1 - math.exp(-speed / C.RunCycleCadenceSpeed))
-		+ C.RunCycleOverdriveCadence * self:Overdrive(speed)
-	if grounded then
+	-- Cadence scales directly with speed so the animation speeds up in step with movement
+	local cadence = math.min(
+		C.RunCycleMaxCadence,
+		C.RunCycleMinCadence + speed * C.RunCycleCadencePerSpeed
+	)
+	if grounded and speed > 0.1 then
 		self.phase = (self.phase + dt * cadence * 2 * math.pi) % (2 * math.pi)
 	end
 	self.air += ((if grounded then 0 else 1) - self.air) * (1 - math.exp(-10 * dt))
