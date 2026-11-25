@@ -103,14 +103,20 @@ local Config = {
 	RunCycleSprintSpeed = 100, -- arms start sweeping back here
 	RunCycleSprintBlend = 50, -- ...and are fully back this much faster
 	RunCycleMinCadence = 1.4, -- steps cycles per second at walking pace
-	RunCycleMaxCadence = 5, -- cap so the legs don't strobe at 300 speed
-	RunCycleCadenceSpeed = 70, -- how quickly cadence climbs toward the cap
+	RunCycleMaxCadence = 2.45, -- cap so the legs don't strobe at 300 speed
+	RunCycleCadenceSpeed = 30, -- how quickly cadence climbs toward the cap
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
+	-- Overdrive: small extras from running top speed (TopSpeed) up to RunCycleOverdriveSpeed,
+	-- so the legs keep up with boosts and slopes. Below TopSpeed nothing changes.
+	RunCycleOverdriveSpeed = 200, -- the extras are fully in by this speed
+	RunCycleOverdriveCadence = 1.0, -- extra step cycles per second (2.45 -> 3.45)
+	RunCycleOverdriveStride = 0.12, -- stride and arm swing grow by up to 12%
+	RunCycleOverdriveLean = 0.08, -- extra forward lean, radians
 	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
-	RunCycleBankMax = 0.7, -- radians, the most it ever banks
-	RunCycleArmDetach = 0.6, -- studs the running arms float away from the shoulders
-	RunCycleArmSnap = 0.4, -- below 1 the arms hold forward/back and switch quickly (1 = smooth swing)
-	RunCycleExaggeration = 1.5, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
+	RunCycleBankMax = 0.48, -- radians, the most it ever banks
+	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders
+	RunCycleArmSnap = 0.82, -- below 1 the arms hold forward/back and switch quickly (1 = smooth swing)
+	RunCycleExaggeration = 1.05, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
 
 	-- Afterimages: glowing ghost copies left behind at very high speed
 	AfterimageSpeed = 140, -- ghosts start appearing above this speed (running tops out at 90)

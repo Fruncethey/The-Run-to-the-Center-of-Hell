@@ -131,16 +131,20 @@ Anything tagged `HomingTarget` can be locked onto, so later things like soul-cha
 
 While running, the arms work cartoon style: one is thrust forward while the other is flung back, and they hold
 those poses and snap across in time with the stride (`RunCycleArmSnap`). They also float a little away from the
-shoulders, sliding toward where they point (`RunCycleArmDetach`, 0.6 studs).
+shoulders, sliding toward where they point (`RunCycleArmDetach`, 0.04 studs).
 
 At speed the whole body banks into turns like a bike, more the faster and tighter the turn
-(`RunCycleBank`, capped at `RunCycleBankMax` = 0.7 radians), and the running lean is deeper
-(about 0.39 radians at a normal run).
+(`RunCycleBank`, capped at `RunCycleBankMax` = 0.48 radians).
 
-Step rate climbs from 1.4 to 5 steps per second and levels off so the legs don't strobe at 300 speed.
+Step rate climbs from 1.4 to 2.45 cycles per second by running top speed (90).
+
+Above top speed (boosts, slopes) the same gait gets small extras so the legs keep up, fully in by
+`RunCycleOverdriveSpeed` (200): about 1 more step cycle per second (`RunCycleOverdriveCadence`), a 12% longer
+stride and arm swing (`RunCycleOverdriveStride`) and a little more lean (`RunCycleOverdriveLean`).
+Below top speed nothing changes.
 Tune it with the `RunCycle*` values in `Config.luau`.
 
-Running and sprinting are cartoon-exaggerated by `RunCycleExaggeration` (1.5): bigger strides with high knees
+Running and sprinting are cartoon-exaggerated by `RunCycleExaggeration` (1.05): bigger strides with high knees
 (forward swing larger than the back swing), wider arm pumps, a deeper lean,
 a bigger bounce on each footfall and a side-to-side hip rock. Walking stays natural. Set it to 1 for the
 realistic gait, or around 2 for very rubbery legs.

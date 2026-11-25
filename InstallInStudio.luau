@@ -982,14 +982,20 @@ local Config = {
 	RunCycleSprintSpeed = 100, -- arms start sweeping back here
 	RunCycleSprintBlend = 50, -- ...and are fully back this much faster
 	RunCycleMinCadence = 1.4, -- steps cycles per second at walking pace
-	RunCycleMaxCadence = 5, -- cap so the legs don't strobe at 300 speed
-	RunCycleCadenceSpeed = 70, -- how quickly cadence climbs toward the cap
+	RunCycleMaxCadence = 2.45, -- cap so the legs don't strobe at 300 speed
+	RunCycleCadenceSpeed = 30, -- how quickly cadence climbs toward the cap
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
+	-- Overdrive: small extras from running top speed (TopSpeed) up to RunCycleOverdriveSpeed,
+	-- so the legs keep up with boosts and slopes. Below TopSpeed nothing changes.
+	RunCycleOverdriveSpeed = 200, -- the extras are fully in by this speed
+	RunCycleOverdriveCadence = 1.0, -- extra step cycles per second (2.45 -> 3.45)
+	RunCycleOverdriveStride = 0.12, -- stride and arm swing grow by up to 12%
+	RunCycleOverdriveLean = 0.08, -- extra forward lean, radians
 	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
-	RunCycleBankMax = 0.7, -- radians, the most it ever banks
-	RunCycleArmDetach = 0.6, -- studs the running arms float away from the shoulders
-	RunCycleArmSnap = 0.4, -- below 1 the arms hold forward/back and switch quickly (1 = smooth swing)
-	RunCycleExaggeration = 1.5, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
+	RunCycleBankMax = 0.48, -- radians, the most it ever banks
+	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders
+	RunCycleArmSnap = 0.82, -- below 1 the arms hold forward/back and switch quickly (1 = smooth swing)
+	RunCycleExaggeration = 1.05, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
 
 	-- Afterimages: glowing ghost copies left behind at very high speed
 	AfterimageSpeed = 140, -- ghosts start appearing above this speed (running tops out at 90)
@@ -2229,6 +2235,7 @@ script(f, 'ModuleScript', 'RunCycle', [=====[-- Procedural, speed-driven run cyc
 --   0-20      -> walk: short stride, relaxed arms, upright
 --   20-90     -> run: long stride, high knee lift, pumping arms, forward lean, bounce
 --   90+       -> sprint: deep lean, arms snapping forward and back, legs at full cadence
+--   90-200    -> overdrive: the sprint gets a bit faster, longer and leaner so it keeps up
 -- In the air it blends to a fall pose. Tuning lives in Config (RunCycle* values).
 
 local Config = require(script.Parent.Config)
@@ -2359,6 +2366,10 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	local move = smooth(speed / C.RunCycleWalkSpeed) -- 0 standing, 1 walking
 	local run = smooth((speed - C.RunCycleWalkSpeed) / (C.RunCycleRunSpeed - C.RunCycleWalkSpeed))
 	local sprint = smooth((speed - C.RunCycleSprintSpeed) / C.RunCycleSprintBlend)
+	-- Overdrive: past running top speed (boosts, slopes) the same gait stretches a little
+	-- further so it keeps up: longer stride, more lean, bigger arm pumps
+	local od = self:Overdrive(speed)
+	local stretch = 1 + C.RunCycleOverdriveStride * od
 
 	local s = math.sin(self.phase)
 	local c = math.cos(self.phase)
@@ -2368,8 +2379,8 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 
 	-- Legs: hips swing opposite each other; the knee folds while that leg swings forward.
 	-- The forward swing is bigger than the back swing, for high cartoon knees.
-	local hipAmp = (lerp(0.45, 0.95, run) + 0.15 * sprint) * x
-	local kneeAmp = (lerp(0.55, 1.7, run) + 0.3 * sprint) * x
+	local hipAmp = (lerp(0.45, 0.95, run) + 0.15 * sprint) * x * stretch
+	local kneeAmp = (lerp(0.55, 1.7, run) + 0.3 * sprint) * x * stretch
 	local function hip(v: number): number
 		return if v > 0 then math.min(1.7, v * lerp(1, 1.3, run)) else v
 	end
@@ -2383,18 +2394,18 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	-- Arms: one thrust forward while the other is flung back, snapping between the two in
 	-- time with the stride (they hold each pose and switch quickly), and floating a little
 	-- away from the shoulders, cartoon style
-	local armAmp = lerp(0.35, 1.1, run) * x * move
+	local armAmp = lerp(0.35, 1.1, run) * x * move * stretch
 	local snap = math.sign(s) * math.abs(s) ^ lerp(1, C.RunCycleArmSnap, run)
 	local shoulderLX = -snap * armAmp
 	local shoulderRX = snap * armAmp
-	local shoulderOut = 0.08 * move
+	local shoulderOut = lerp(0.08, 0.32, run) * move
 	local detach = C.RunCycleArmDetach * run * move
 	local elbowL = lerp(lerp(0.15, 1.5, run) * move + 0.1, 0.25, sprint) * lerp(1, 1.15, run * (x - 1))
 	local elbowR = elbowL
 
 	-- Torso: lean into speed, twist against the hips, bounce on each footfall,
 	-- and rock the hips side to side
-	local lean = -(lerp(0.04, 0.36, run) * move + 0.22 * sprint) * x
+	local lean = -(lerp(0.04, 0.36, run) * move + 0.10 * sprint + C.RunCycleOverdriveLean * od) * x
 	local twist = 0.18 * s * run * (1 - 0.5 * sprint) * x
 	local bounce = (math.abs(c) - 0.5) * lerp(0.08, 0.35, run) * x * x * move
 	local sway = 0.08 * s * run * (x - 1) * 2
@@ -2444,6 +2455,12 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	return pose
 end
 
+-- 0 at running top speed, 1 at RunCycleOverdriveSpeed and above
+function RunCycle:Overdrive(speed: number): number
+	local C = Config
+	return smooth((speed - C.TopSpeed) / math.max(1, C.RunCycleOverdriveSpeed - C.TopSpeed))
+end
+
 -- turnRate: how fast the heading is turning, radians per second (positive = left)
 function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalSpeed: number, turnRate: number?)
 	self.time += dt
@@ -2456,6 +2473,7 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 	-- Cadence rises quickly at first, then levels off so top speeds don't strobe
 	local cadence = C.RunCycleMinCadence
 		+ (C.RunCycleMaxCadence - C.RunCycleMinCadence) * (1 - math.exp(-speed / C.RunCycleCadenceSpeed))
+		+ C.RunCycleOverdriveCadence * self:Overdrive(speed)
 	if grounded then
 		self.phase = (self.phase + dt * cadence * 2 * math.pi) % (2 * math.pi)
 	end
