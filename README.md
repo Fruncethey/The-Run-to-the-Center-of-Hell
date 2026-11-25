@@ -10,7 +10,7 @@ A custom momentum character controller for Roblox, plus a test level.
 | `src/shared/Momentum/Controller.luau` | The controller: own velocity, slope physics, ground snapping, surface alignment (walls, loops, ceilings), jump, roll, spin-dash, heat and boost. |
 | `src/shared/Momentum/ChaseCamera.luau` | Chase camera that swings behind your direction of travel, pulls back and widens FOV with speed. |
 | `src/shared/Momentum/Hud.luau` | Speedometer, heat meter, state readout, controls hint. |
-| `src/shared/Momentum/RunCycle.luau` | Procedural run cycle driven by speed: walk, run and sprint blend together, with idle and in-air poses. |
+| `src/shared/Momentum/RunCycle.luau` | Procedural run cycle (R15 and R6) driven by speed: walk, run and sprint blend together, with idle and in-air poses. |
 | `src/shared/Momentum/CharacterFx.luau` | Runs the run cycle (R6 falls back to default animations), spin-ball, boost trail, glow and afterimages. |
 | `src/shared/Momentum/InputState.luau` | Keyboard and gamepad input. |
 | `src/shared/Momentum/LockOn.luau` | Picks the enemy to lock onto in the air, draws the reticle, handles touching enemies (defeat or get hurt). |
@@ -118,7 +118,7 @@ Anything tagged `HomingTarget` can be locked onto, so later things like soul-cha
 
 ## Run cycle
 
-`RunCycle.luau` poses the R15 joints every frame instead of playing an uploaded animation, so the gait follows your exact speed:
+`RunCycle.luau` poses the R15 (or R6) joints every frame instead of playing an uploaded animation, so the gait follows your exact speed:
 
 | Speed | Look |
 |---|---|
@@ -138,20 +138,20 @@ realistic gait, or around 2 for very rubbery legs.
 
 ## Ash, the main character
 
-Everyone plays as Ash. `AshBuilder` builds him on server start out of plain parts (chunky low-poly, no uploaded
-assets) and installs him as `StarterPlayer.StarterCharacter`:
+Everyone plays as Ash, built on the standard R6 rig to keep the art style simple. `AshBuilder` makes him on
+server start (plain parts, no uploaded assets) and installs him as `StarterPlayer.StarterCharacter`. His look is
+mostly color plus a few touches:
 
-- Slim charcoal-gray runner build on a standard R15 rig, so the run cycle, spin-ball and afterimages all work on him.
-- Glowing orange cracks over his body. They smoulder and pulse at rest and blaze brighter as he speeds up (full at 150).
-- Blank glowing white eyes and swept-back ash spikes with ember tips.
-- A tattered red scarf. The knot is part of the body; the tail is a small rope simulation that hangs at rest and
+- Charcoal-gray body with the classic R6 head.
+- Blank glowing white eyes.
+- A glowing orange crack across his chest and glowing orange sneaker bands, which smoulder at rest and blaze
+  brighter as he speeds up (full at 150). Heel flames grow with speed too.
+- A red scarf. The knot is part of the body; the tail is a small rope simulation that hangs at rest and
   streams and whips behind him at speed, splitting into two ragged ends.
-- Flame-wrapped sneakers: dark shoes with white toe caps, a glowing sole, flame shapes up the sides and real flames
-  off the heels that grow with speed.
 
-Tune the glow and scarf with the `Ash*` values in `Config.luau`. To change his shape or colors, edit `AshBuilder.luau`.
-The scarf tail, crack brightening and bigger flames are drawn on your own screen only. Other players see his
-body, knot, cracks and steady heel flames.
+The run cycle drives R6 too: the same gait, with the torso taking the lean and twist, and no knees or elbows.
+Tune the glow and scarf with the `Ash*` values in `Config.luau`, and his colors in `AshBuilder.luau`.
+The scarf tail, brightening glow and bigger flames are drawn on your own screen only.
 
 ## Afterimages
 

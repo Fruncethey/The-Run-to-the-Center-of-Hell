@@ -1,4 +1,4 @@
--- Procedural, speed-driven run cycle for R15 characters.
+-- Procedural, speed-driven run cycle for R15 and R6 characters.
 -- Instead of playing a fixed animation, every frame this poses the joints
 -- (the Transform of each Motor6D, or AnimationConstraint on newer avatars) from a gait cycle whose cadence, stride and posture all
 -- follow the controller's speed:
@@ -42,19 +42,58 @@ local function rot(x: number, y: number, z: number): CFrame
 	return CFrame.fromEulerAnglesXYZ(x, y, z)
 end
 
--- Returns nil for rigs it can't drive (R6), so the caller can fall back.
+-- R6 joints, each with the parent part it lives in
+local R6_JOINTS = {
+	RootJoint = "HumanoidRootPart",
+	Neck = "Torso",
+	["Left Shoulder"] = "Torso",
+	["Right Shoulder"] = "Torso",
+	["Left Hip"] = "Torso",
+	["Right Hip"] = "Torso",
+}
+
+local function findJoint(parent: Instance?, name: string): Instance?
+	local joint = parent and parent:FindFirstChild(name)
+	if joint and (joint:IsA("Motor6D") or joint:IsA("AnimationConstraint")) then
+		return joint
+	end
+	return nil
+end
+
+-- Works on R15 and R6 rigs. Returns nil for rigs it can't drive, so the caller can fall back.
 function RunCycle.new(character: Model)
 	local motors = {}
+	local r6 = false
 	for name, partName in JOINTS do
-		local part = character:FindFirstChild(partName)
-		local joint = part and part:FindFirstChild(name)
-		if not (joint and (joint:IsA("Motor6D") or joint:IsA("AnimationConstraint"))) then
-			return nil
+		local joint = findJoint(character:FindFirstChild(partName), name)
+		if not joint then
+			motors = nil
+			break
 		end
 		motors[name] = joint
 	end
+	if not motors then
+		-- Try R6: same gait, mapped onto its six joints in Update
+		motors = {}
+		r6 = true
+		for name, partName in R6_JOINTS do
+			local joint = findJoint(character:FindFirstChild(partName), name)
+			if not (joint and joint:IsA("Motor6D")) then
+				return nil
+			end
+			motors[name] = joint
+		end
+	end
 	local self = setmetatable({}, RunCycle)
 	self.motors = motors
+	self.r6 = r6
+	if r6 then
+		-- Each R6 joint's frame is rotated relative to its parts; poses are converted into it
+		self.frames = {}
+		for name, joint in motors do
+			self.frames[name] = joint.C0.Rotation
+		end
+	end
 	self.animator = character:FindFirstChildWhichIsA("Animator", true)
 	self.phase = 0
 	self.time = 0
@@ -62,6 +101,28 @@ function RunCycle.new(character: Model)
 	self.speed = 0
 	self.weight = 0 -- fades the pose in after Reset (e.g. leaving the spin-ball)
 	return self
+end
+
+-- Map the R15 pose onto R6. R6 has one torso part, so it takes the R15 root and
+-- waist together, and the hips are countered by the waist so the legs still
+-- swing from straight down. There are no knees or elbows, so those drop out.
+function RunCycle:ToR6(pose)
+	local torso = pose.Root * pose.Waist
+	local waistInv = pose.Waist.Rotation:Inverse()
+	local r6 = {
+		RootJoint = torso,
+		Neck = pose.Neck,
+		["Left Shoulder"] = pose.LeftShoulder,
+		["Right Shoulder"] = pose.RightShoulder,
+		["Left Hip"] = waistInv * pose.LeftHip,
+		["Right Hip"] = waistInv * pose.RightHip,
+	}
+	-- Poses are in the parts' own axes; express them in each joint's frame
+	for name, cf in r6 do
+		local f = self.frames[name]
+		r6[name] = f:Inverse() * cf * f
+	end
+	return r6
 end
 
 -- Target pose for every joint, from the gait at this speed.
@@ -179,6 +240,9 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 
 	self.weight += (1 - self.weight) * (1 - math.exp(-10 * dt))
 	local pose = self:Pose(speed, grounded, verticalSpeed)
+	if self.r6 then
+		pose = self:ToR6(pose)
+	end
 	for name, joint in self.motors do
 		joint.Transform = CFrame.identity:Lerp(pose[name], self.weight)
 	end

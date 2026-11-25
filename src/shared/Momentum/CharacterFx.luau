@@ -1,5 +1,5 @@
--- Visuals for the local character: a speed-driven procedural run cycle (R15;
--- R6 falls back to the default run/idle/fall animations), a molten spin-ball while jumping, rolling or charging, and a fire trail
+-- Visuals for the local character: a speed-driven procedural run cycle
+-- (R6 and R15; other rigs fall back to the default run/idle/fall animations), a molten spin-ball while jumping, rolling or charging, and a fire trail
 -- plus glow while boosting, and glowing afterimages at very high speed.
 -- Everything here is local-only presentation.
 

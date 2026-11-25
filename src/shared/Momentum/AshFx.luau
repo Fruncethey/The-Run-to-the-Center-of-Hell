@@ -50,7 +50,7 @@ function AshFx.new(character: Model, ctrl)
 		end
 	end
 	self.knot = character:FindFirstChild("AshScarfKnot", true)
-	self.torso = character:FindFirstChild("UpperTorso")
+	self.torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
 
 	-- Scarf tail: a chain of points hanging off the back of the knot, drawn as flat strips.
 	-- The last strip splits in two for a tattered end.
