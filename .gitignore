@@ -1,0 +1,24 @@
+# Roblox place/model files (build output; source of truth is src/)
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.rbxl.lock
+*.rbxlx.lock
+
+# Rojo / tooling
+sourcemap.json
+/build/
+/out/
+/Packages/
+/ServerPackages/
+/DevPackages/
+/roblox_packages/
+/.lune/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

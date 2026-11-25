@@ -1,0 +1,17 @@
+{
+  "name": "TheRunToTheCenterOfHell",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Momentum": { "$path": "src/shared/Momentum" }
+    },
+    "ServerScriptService": {
+      "MomentumServer": { "$path": "src/server" }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "MomentumClient": { "$path": "src/client" }
+      }
+    }
+  }
+}

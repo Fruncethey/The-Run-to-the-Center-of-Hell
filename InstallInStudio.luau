@@ -1,0 +1,1894 @@
+-- Installer for The Run to the Center of Hell momentum prototype.
+-- Paste this whole file into Roblox Studio's Command Bar (View > Command Bar) and press Enter.
+-- It (re)creates the scripts; running it again replaces the old copies.
+local function put(parent, folderName)
+  local old = parent:FindFirstChild(folderName); if old then old:Destroy() end
+  local f = Instance.new('Folder'); f.Name = folderName; f.Parent = parent; return f
+end
+local function script(folder, class, name, source)
+  local s = Instance.new(class); s.Name = name; s.Source = source; s.Parent = folder; return s
+end
+do local f = put(game:GetService('ReplicatedStorage'), 'Momentum')
+script(f, 'ModuleScript', 'CharacterFx', [=====[-- Visuals for the local character: a speed-driven procedural run cycle (R15;
+-- R6 falls back to the default run/idle/fall animations), a molten spin-ball while jumping, rolling or charging, and a fire trail
+-- plus glow while boosting. Everything here is local-only presentation.
+
+local Workspace = game:GetService("Workspace")
+
+local Config = require(script.Parent.Config)
+local RunCycle = require(script.Parent.RunCycle)
+
+local CharacterFx = {}
+CharacterFx.__index = CharacterFx
+
+local BALL_SIZE = 4.6
+
+local function loadTrack(animator: Animator, animate: Instance?, folderName: string)
+	local folder = animate and animate:FindFirstChild(folderName)
+	local anim = folder and folder:FindFirstChildWhichIsA("Animation", true)
+	if not anim then
+		return nil
+	end
+	local ok, track = pcall(function()
+		return animator:LoadAnimation(anim)
+	end)
+	if ok and track then
+		track.Looped = true
+		return track
+	end
+	return nil
+end
+
+function CharacterFx.new(character: Model, humanoid: Humanoid, root: BasePart, ctrl)
+	local self = setmetatable({}, CharacterFx)
+	self.character = character
+	self.root = root
+	self.ctrl = ctrl
+	self.spin = 0
+	self.hidden = false
+	self.mode = nil
+
+	-- Our own state drives animation, so turn off the default Animate script.
+	local animate = character:FindFirstChild("Animate")
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if animate and animate:IsA("LocalScript") then
+		animate.Disabled = true
+	end
+	self.tracks = {}
+	self.runCycle = RunCycle.new(character)
+	if animator then
+		for _, t in animator:GetPlayingAnimationTracks() do
+			t:Stop(0)
+		end
+	end
+	if animator and not self.runCycle then
+		self.tracks.run = loadTrack(animator, animate, "run")
+		self.tracks.idle = loadTrack(animator, animate, "idle")
+		self.tracks.fall = loadTrack(animator, animate, "fall")
+	end
+
+	local ball = Instance.new("Part")
+	ball.Name = "MomentumSpinBall"
+	ball.Shape = Enum.PartType.Ball
+	ball.Size = Vector3.one * BALL_SIZE
+	ball.Material = Enum.Material.Neon
+	ball.Color = Color3.fromRGB(255, 90, 30)
+	ball.Transparency = 1
+	ball.Anchored = true
+	ball.CanCollide = false
+	ball.CanQuery = false
+	ball.CanTouch = false
+	ball.CastShadow = false
+	local stripe = Instance.new("Decal")
+	stripe.Texture = "rbxasset://textures/SpawnLocation.png"
+	stripe.Face = Enum.NormalId.Front
+	stripe.Transparency = 1
+	stripe.Parent = ball
+	ball.Parent = Workspace
+	self.ball = ball
+
+	local a0 = Instance.new("Attachment")
+	a0.Name = "MomentumTrailTop"
+	a0.Position = Vector3.new(0, 1, 0)
+	a0.Parent = root
+	local a1 = Instance.new("Attachment")
+	a1.Name = "MomentumTrailBottom"
+	a1.Position = Vector3.new(0, -1.2, 0)
+	a1.Parent = root
+	local trail = Instance.new("Trail")
+	trail.Attachment0 = a0
+	trail.Attachment1 = a1
+	trail.Lifetime = 0.35
+	trail.LightEmission = 1
+	trail.FaceCamera = true
+	trail.Color = ColorSequence.new(Color3.fromRGB(255, 220, 120), Color3.fromRGB(200, 30, 10))
+	trail.Transparency = NumberSequence.new(0.1, 1)
+	trail.Enabled = false
+	trail.Parent = root
+	self.trail = trail
+
+	local light = Instance.new("PointLight")
+	light.Color = Color3.fromRGB(255, 120, 40)
+	light.Range = 14
+	light.Brightness = 0
+	light.Parent = root
+	self.light = light
+
+	self.parts = {}
+	local function track(d)
+		if d:IsA("BasePart") or d:IsA("Decal") then
+			table.insert(self.parts, d)
+		end
+	end
+	for _, d in character:GetDescendants() do
+		track(d)
+	end
+	self.descConn = character.DescendantAdded:Connect(track)
+
+	return self
+end
+
+function CharacterFx:SetHidden(hidden: boolean)
+	if hidden == self.hidden then
+		return
+	end
+	self.hidden = hidden
+	for _, p in self.parts do
+		if p.Parent then
+			p.LocalTransparencyModifier = if hidden then 1 else 0
+		end
+	end
+end
+
+function CharacterFx:Play(mode)
+	if mode == self.mode then
+		return
+	end
+	for name, track in self.tracks do
+		if name ~= mode and track.IsPlaying then
+			track:Stop(0.15)
+		end
+	end
+	local track = mode and self.tracks[mode]
+	if track then
+		track:Play(0.15)
+	end
+	self.mode = mode
+end
+
+-- Joint poses have to be written before physics each frame, so the client calls
+-- this from PreSimulation (right after the controller moves the character).
+function CharacterFx:UpdatePose(dt: number)
+	local rc = self.runCycle
+	if not rc then
+		return
+	end
+	local ctrl = self.ctrl
+	if ctrl.ball or ctrl.rolling or ctrl.charging then
+		rc:Reset()
+		return
+	end
+	local v = ctrl.velocity
+	rc:Update(dt, v.Magnitude, ctrl.grounded, v.Y)
+end
+
+function CharacterFx:Update(dt: number)
+	local ctrl = self.ctrl
+	local speed = ctrl.velocity.Magnitude
+	local inBall = ctrl.ball or ctrl.rolling or ctrl.charging
+
+	self:SetHidden(inBall)
+	if inBall then
+		if not self.runCycle then
+			self:Play(nil)
+		end
+		local up = ctrl.visualUp
+		local cf = self.root.CFrame
+		local radius = BALL_SIZE / 2
+		self.spin += (speed / radius + (if ctrl.charging then 25 + ctrl.spinCharge * 40 else 0)) * dt
+		local center = cf.Position - up * (ctrl.hipHeight - radius)
+		if not ctrl.grounded then
+			center = cf.Position
+		end
+		local size = BALL_SIZE + (if ctrl.charging then ctrl.spinCharge * 0.8 * (0.6 + 0.4 * math.sin(os.clock() * 40)) else 0)
+		self.ball.Size = Vector3.one * size
+		self.ball.CFrame = (cf - cf.Position + center) * CFrame.Angles(-self.spin, 0, 0)
+		self.ball.Transparency = 0.1
+		self.ball.Decal.Transparency = 0.3
+	else
+		self.ball.Transparency = 1
+		self.ball.Decal.Transparency = 1
+		if self.runCycle then
+			-- posed in UpdatePose
+		elseif ctrl.grounded then
+			self:Play(if speed > 3 then "run" else "idle")
+			local run = self.tracks.run
+			if run and self.mode == "run" then
+				run:AdjustSpeed(math.clamp(speed / 22, 0.7, 3.5))
+			end
+		else
+			self:Play("fall")
+		end
+	end
+
+	self.trail.Enabled = ctrl.boosting
+	self.light.Brightness = ctrl.heat * 1.5 + (if ctrl.boosting then 2.5 else 0)
+	self.light.Range = 10 + ctrl.heat * 8
+end
+
+function CharacterFx:Destroy()
+	self:SetHidden(false)
+	if self.runCycle then
+		pcall(self.runCycle.Reset, self.runCycle)
+	end
+	if self.descConn then
+		self.descConn:Disconnect()
+	end
+	self.ball:Destroy()
+	self.trail:Destroy()
+	self.light:Destroy()
+end
+
+return CharacterFx
+]=====])
+script(f, 'ModuleScript', 'ChaseCamera', [=====[-- Chase camera: swings in behind your direction of travel, pulls back and widens
+-- the FOV as speed rises, and kicks out a little more while boosting.
+-- Hold right mouse (or use the right stick) to look around; mouse wheel zooms.
+
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local Config = require(script.Parent.Config)
+
+local function lerpAngle(a: number, b: number, t: number): number
+	local d = (b - a + math.pi) % (2 * math.pi) - math.pi
+	return a + d * t
+end
+
+local ChaseCamera = {}
+ChaseCamera.__index = ChaseCamera
+
+function ChaseCamera.new()
+	local self = setmetatable({}, ChaseCamera)
+	self.yaw = 0
+	self.pitch = Config.CamPitch
+	self.distance = Config.CamDistance
+	self.fov = Config.FovBase
+	self.zoom = 0
+	self.manualTimer = 0
+	self.stick = Vector2.zero
+	self.ctrl = nil
+
+	self.rayParams = RaycastParams.new()
+	self.rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	self.rayParams.IgnoreWater = true
+
+	UserInputService.InputChanged:Connect(function(io, processed)
+		if io.KeyCode == Enum.KeyCode.Thumbstick2 then
+			local p = Vector2.new(io.Position.X, io.Position.Y)
+			self.stick = if p.Magnitude > 0.2 then p else Vector2.zero
+		elseif io.UserInputType == Enum.UserInputType.MouseWheel and not processed then
+			self.zoom = math.clamp(self.zoom - io.Position.Z * 2, -8, 24)
+		end
+	end)
+	return self
+end
+
+function ChaseCamera:Attach(ctrl, ignore: { Instance })
+	self.ctrl = ctrl
+	self.rayParams.FilterDescendantsInstances = ignore
+	local f = ctrl.facing
+	self.yaw = math.atan2(-f.X, -f.Z)
+	self.pitch = Config.CamPitch
+	self.respawnCount = ctrl.respawnCount
+end
+
+function ChaseCamera:Update(dt: number)
+	local ctrl = self.ctrl
+	local camera = Workspace.CurrentCamera
+	if not ctrl or not camera then
+		return
+	end
+	camera.CameraType = Enum.CameraType.Scriptable
+	if ctrl.respawnCount ~= self.respawnCount then
+		self.respawnCount = ctrl.respawnCount
+		self.yaw = math.atan2(-ctrl.facing.X, -ctrl.facing.Z)
+		self.pitch = Config.CamPitch
+	end
+
+	-- Manual look
+	if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+		UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+		local d = UserInputService:GetMouseDelta()
+		if d.Magnitude > 0 then
+			self.yaw -= d.X * Config.CamSensitivity
+			self.pitch -= d.Y * Config.CamSensitivity
+			self.manualTimer = Config.CamManualHold
+		end
+	elseif UserInputService.MouseBehavior == Enum.MouseBehavior.LockCurrentPosition then
+		UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+	end
+	if self.stick.Magnitude > 0 then
+		self.yaw -= self.stick.X * Config.GamepadCamSpeed * dt
+		self.pitch += self.stick.Y * Config.GamepadCamSpeed * 0.6 * dt
+		self.manualTimer = Config.CamManualHold
+	end
+	self.manualTimer -= dt
+
+	-- Auto-follow the direction of travel (not while upside down in a loop)
+	local v = ctrl.velocity
+	local h = Vector3.new(v.X, 0, v.Z)
+	local upright = (not ctrl.grounded) or ctrl.up.Y > 0.35
+	if self.manualTimer <= 0 and upright and not ctrl.charging and h.Magnitude > Config.CamFollowMinSpeed then
+		local target = math.atan2(-h.X, -h.Z)
+		local rate = Config.CamFollowRate * math.clamp(h.Magnitude / 60, 0.3, 2)
+		self.yaw = lerpAngle(self.yaw, target, 1 - math.exp(-rate * dt))
+		self.pitch += (Config.CamPitch - self.pitch) * (1 - math.exp(-2 * dt))
+	end
+	self.pitch = math.clamp(self.pitch, -1.3, 0.5)
+
+	-- Pull back and widen with speed
+	local alpha = math.clamp(v.Magnitude / Config.CamSpeedForMax, 0, 1)
+	local targetDistance = Config.CamDistance + (Config.CamMaxDistance - Config.CamDistance) * alpha + self.zoom
+	self.distance += (targetDistance - self.distance) * (1 - math.exp(-3 * dt))
+	local targetFov = Config.FovBase + (Config.FovMax - Config.FovBase) * alpha
+	if ctrl.boosting then
+		targetFov += Config.FovBoostKick
+	end
+	self.fov += (targetFov - self.fov) * (1 - math.exp(-5 * dt))
+
+	local focus = ctrl.root.Position + Vector3.new(0, Config.CamHeight, 0)
+	local rot = CFrame.fromEulerAnglesYXZ(self.pitch, self.yaw, 0)
+	local offset = rot:VectorToWorldSpace(Vector3.new(0, 0, self.distance))
+	local hit = Workspace:Raycast(focus, offset, self.rayParams)
+	local eye = focus + offset
+	if hit then
+		eye = focus + offset.Unit * math.max(1, hit.Distance - 1)
+	end
+	if ctrl.boosting then
+		eye += Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5) * 0.15
+	end
+
+	camera.CFrame = CFrame.lookAt(eye, focus)
+	camera.FieldOfView = self.fov
+end
+
+return ChaseCamera
+]=====])
+script(f, 'ModuleScript', 'Config', [=====[-- Tuning values for the momentum controller, camera and heat meter.
+-- Units are studs and seconds. Tweak freely while playtesting.
+
+local Config = {
+	-- Core movement
+	Gravity = 110,
+	TerminalVelocity = 220,
+	Accel = 55, -- ground acceleration while holding a direction
+	Decel = 160, -- braking when holding against your velocity
+	Friction = 35, -- ground slowdown with no input
+	TopSpeed = 90, -- the fastest you can get by running on flat ground
+	MaxSpeed = 320, -- hard cap (slopes, spin-dash and boost can exceed TopSpeed)
+	SlopeFactor = 0.55, -- share of gravity that pushes you along slopes
+	TurnRateSlow = 9, -- radians/sec when standing still
+	TurnRateFast = 1.4, -- radians/sec at top speed and above
+	AirAccel = 45,
+
+	-- Jump
+	JumpPower = 55, -- launched along the surface normal
+	JumpCutSpeed = 25, -- releasing jump early caps upward speed to this
+
+	-- Surfaces
+	MinWallSpeed = 25, -- below this you peel off walls, ceilings and loop tops
+	SteepSurfaceY = 0.5, -- a surface whose normal.Y is below this counts as a wall
+	LandMinNormalY = 0.55, -- from the air you only land on surfaces flatter than this
+	SnapDistance = 2.5, -- how far below your feet the ground probe reaches
+	SnapMinDot = 0.5, -- largest surface angle change (60 deg) the ground snap follows
+	TransitionMinDot = 0.64, -- largest angle change (50 deg) you can run straight into
+	DetachPush = 6,
+	BodyRadius = 1.2,
+	BodyOffset = 0.5,
+	Skin = 0.05,
+	MaxStepDistance = 2, -- physics substeps so fast movement never tunnels
+	VisualUpRate = 12,
+
+	-- Rolling and spin-dash
+	RollMinSpeed = 20,
+	RollEndSpeed = 8,
+	RollFriction = 10,
+	RollTurnRate = 1.6,
+	RollSlopeDown = 1.7, -- rolling downhill gains more speed
+	RollSlopeUp = 0.7, -- and loses less going uphill
+	SpinDashMaxStartSpeed = 20,
+	SpinChargeTime = 0.9, -- seconds of holding for a full charge
+	SpinRevBonus = 0.25, -- each jump tap while charging adds this much charge
+	SpinDashMin = 60,
+	SpinDashMax = 160,
+
+	-- Heat meter and boost
+	HeatSpeedThreshold = 50, -- heat builds above this speed
+	HeatSpeedRange = 100,
+	HeatFillRate = 0.35,
+	HeatCoolRate = 0.03,
+	BoostDrain = 0.3, -- heat per second while boosting
+	BoostMinHeat = 0.15, -- heat needed to start a boost
+	BoostSpeed = 170,
+	BoostAccel = 500,
+	BoostAirHold = 4, -- boosting in the air slows your fall
+
+	-- Chase camera
+	CamDistance = 14,
+	CamMaxDistance = 28,
+	CamHeight = 3,
+	CamPitch = -0.25,
+	CamSpeedForMax = 200,
+	CamFollowRate = 3,
+	CamFollowMinSpeed = 12,
+	CamManualHold = 1.2, -- seconds the auto-follow waits after you move the camera
+	CamSensitivity = 0.004,
+	GamepadCamSpeed = 3,
+	FovBase = 70,
+	FovMax = 95,
+	FovBoostKick = 8,
+
+	-- Procedural run cycle (R15)
+	RunCycleWalkSpeed = 20, -- full walk stride by this speed
+	RunCycleRunSpeed = 60, -- full run (knee lift, arm pump, lean) by this speed
+	RunCycleSprintSpeed = 100, -- arms start sweeping back here
+	RunCycleSprintBlend = 50, -- ...and are fully back this much faster
+	RunCycleMinCadence = 1.4, -- steps cycles per second at walking pace
+	RunCycleMaxCadence = 5, -- cap so the legs don't strobe at 300 speed
+	RunCycleCadenceSpeed = 70, -- how quickly cadence climbs toward the cap
+	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
+
+	CollisionGroup = "MomentumPlayer",
+}
+
+return Config
+]=====])
+script(f, 'ModuleScript', 'Controller', [=====[-- Momentum character controller.
+-- Replaces Humanoid movement with our own velocity, slope physics, ground snapping
+-- and surface alignment, so the character can run up walls and around loops.
+-- The Humanoid is kept in the Physics state; every frame we write the root CFrame
+-- and velocity ourselves (the client owns its character, so this replicates).
+
+local Workspace = game:GetService("Workspace")
+
+local Config = require(script.Parent.Config)
+
+local WORLD_UP = Vector3.yAxis
+
+local function flatten(v: Vector3): Vector3
+	return Vector3.new(v.X, 0, v.Z)
+end
+
+local function projectOnPlane(v: Vector3, n: Vector3): Vector3
+	return v - n * v:Dot(n)
+end
+
+local function safeUnit(v: Vector3, fallback)
+	local m = v.Magnitude
+	if m > 1e-5 then
+		return v / m
+	end
+	return fallback
+end
+
+-- Rotate unit vector `dir` toward `target` around `normal`, by at most `maxAngle` radians.
+local function rotateToward(dir: Vector3, target: Vector3, normal: Vector3, maxAngle: number): Vector3
+	local angle = math.acos(math.clamp(dir:Dot(target), -1, 1))
+	if angle <= maxAngle then
+		return target
+	end
+	local axis = if dir:Cross(target):Dot(normal) >= 0 then normal else -normal
+	return CFrame.fromAxisAngle(axis, maxAngle) * dir
+end
+
+local function towards(a: Vector3, b: Vector3, t: number): Vector3
+	if a:Dot(b) < -0.95 then
+		a = (a + Vector3.new(0.1, 0, 0.05)).Unit
+	end
+	return safeUnit(a:Lerp(b, t), b)
+end
+
+local Controller = {}
+Controller.__index = Controller
+
+function Controller.new(character: Model, humanoid: Humanoid, root: BasePart)
+	local self = setmetatable({}, Controller)
+	self.character = character
+	self.humanoid = humanoid
+	self.root = root
+
+	if humanoid.RigType == Enum.HumanoidRigType.R6 then
+		self.hipHeight = root.Size.Y / 2 + 2
+	else
+		self.hipHeight = humanoid.HipHeight + root.Size.Y / 2
+	end
+
+	self.position = root.Position
+	self.velocity = Vector3.zero
+	self.up = WORLD_UP
+	self.visualUp = WORLD_UP
+	self.facing = safeUnit(flatten(root.CFrame.LookVector), Vector3.xAxis)
+	self.grounded = false
+	self.groundPart = nil
+	self.airGrace = 0
+
+	self.jumping = false
+	self.jumpNormal = WORLD_UP
+	self.ball = false -- curled up after a jump
+	self.rolling = false
+	self.charging = false
+	self.spinCharge = 0
+	self.boosting = false
+	self.heat = 0
+
+	self.spawnPosition = root.Position
+	self.spawnFacing = self.facing
+
+	self.input = {
+		move = Vector2.zero,
+		jumpHeld = false,
+		jumpPressed = false,
+		rollHeld = false,
+		boostHeld = false,
+	}
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { character }
+	params.IgnoreWater = true
+	self.rayParams = params
+
+	return self
+end
+
+function Controller:SetFacing(look: Vector3)
+	local f = safeUnit(flatten(look), nil)
+	if f then
+		self.facing = f
+		self.spawnFacing = f
+	end
+end
+
+function Controller:AddIgnore(instance: Instance)
+	local list = self.rayParams.FilterDescendantsInstances
+	table.insert(list, instance)
+	self.rayParams.FilterDescendantsInstances = list
+end
+
+function Controller:GetSpeed(): number
+	return self.velocity.Magnitude
+end
+
+-- Camera-relative input, worked out on flat ground and then tilted onto the
+-- surface we're standing on. Tilting (instead of projecting the camera onto the
+-- surface) keeps "forward" meaning "keep going" on walls, loops and ceilings.
+function Controller:GetWishDirection(camCF: CFrame, up: Vector3): Vector3
+	local mv = self.input.move
+	local amount = math.min(mv.Magnitude, 1)
+	if amount < 0.1 then
+		return Vector3.zero
+	end
+	local fwd = safeUnit(flatten(camCF.LookVector), nil)
+		or safeUnit(flatten(camCF.UpVector), nil)
+		or safeUnit(flatten(self.facing), Vector3.xAxis)
+	local right = fwd:Cross(WORLD_UP)
+	local wish = safeUnit(fwd * mv.Y + right * mv.X, Vector3.zero)
+
+	if up.Y < 0.999 then
+		local axis = WORLD_UP:Cross(up)
+		local angle = math.acos(math.clamp(up.Y, -1, 1))
+		if axis.Magnitude < 1e-3 then
+			-- Upside down: flip over the axis we're travelling around
+			axis = safeUnit(self.facing:Cross(up), Vector3.zAxis)
+		end
+		wish = projectOnPlane(CFrame.fromAxisAngle(axis.Unit, angle) * wish, up)
+		wish = safeUnit(wish, Vector3.zero)
+	end
+	return wish * amount
+end
+
+function Controller:Step(dt: number, camCF: CFrame)
+	dt = math.min(dt, 1 / 20)
+	local input = self.input
+	self.airGrace = math.max(0, self.airGrace - dt)
+
+	local planeUp = if self.grounded then self.up else WORLD_UP
+	local wish = self:GetWishDirection(camCF, planeUp)
+
+	-- Jump, or rev the spin-dash while charging
+	if input.jumpPressed then
+		input.jumpPressed = false
+		if self.charging then
+			self.spinCharge = math.min(1, self.spinCharge + Config.SpinRevBonus)
+		elseif self.grounded then
+			self:Jump()
+		end
+	end
+	if self.jumping then
+		local along = self.velocity:Dot(self.jumpNormal)
+		if not input.jumpHeld then
+			if along > Config.JumpCutSpeed then
+				self.velocity -= self.jumpNormal * (along - Config.JumpCutSpeed)
+			end
+			self.jumping = false
+		elseif along <= 0 then
+			self.jumping = false
+		end
+	end
+
+	self:UpdateRollAndCharge(dt, wish)
+	self:UpdateBoostAndHeat(dt)
+
+	if self.grounded then
+		self:GroundMovement(dt, wish)
+	else
+		self:AirMovement(dt, wish)
+	end
+
+	local speed = self.velocity.Magnitude
+	if speed > Config.MaxSpeed then
+		self.velocity *= Config.MaxSpeed / speed
+	end
+
+	-- Integrate in substeps so high speeds never skip through geometry
+	local distance = self.velocity.Magnitude * dt
+	local steps = math.clamp(math.ceil(distance / Config.MaxStepDistance), 1, 16)
+	local sdt = dt / steps
+	for _ = 1, steps do
+		self:MoveAndCollide(self.velocity * sdt)
+		if self.grounded then
+			self:ProbeGround(sdt)
+		else
+			self:ProbeLanding(sdt)
+		end
+	end
+
+	-- Facing follows velocity on the current plane
+	local ref = if self.grounded then self.up else WORLD_UP
+	local planar = projectOnPlane(self.velocity, ref)
+	if planar.Magnitude > 2 and not self.charging then
+		self.facing = planar.Unit
+	end
+
+	local targetUp = if self.grounded then self.up else WORLD_UP
+	self.visualUp = towards(self.visualUp, targetUp, 1 - math.exp(-Config.VisualUpRate * dt))
+
+	local killY = Workspace:GetAttribute("MomentumKillY")
+	if typeof(killY) == "number" and self.position.Y < killY then
+		self:Respawn()
+	end
+end
+
+function Controller:Jump()
+	local n = self.up
+	self.velocity += n * Config.JumpPower
+	self.position += n * 0.1
+	self.grounded = false
+	self.groundPart = nil
+	self.jumping = true
+	self.jumpNormal = n
+	self.ball = true
+	self.rolling = false
+	self.airGrace = 0.1
+end
+
+function Controller:UpdateRollAndCharge(dt: number, wish: Vector3)
+	if not self.grounded then
+		self.charging = false
+		self.spinCharge = 0
+		return
+	end
+
+	if self.charging then
+		if self.input.rollHeld then
+			self.spinCharge = math.min(1, self.spinCharge + dt / Config.SpinChargeTime)
+			self.velocity *= math.max(0, 1 - 12 * dt)
+			if wish.Magnitude > 0.1 then
+				self.facing = wish.Unit
+			end
+		else
+			local dir = safeUnit(projectOnPlane(self.facing, self.up), nil)
+			if dir then
+				local power = Config.SpinDashMin + (Config.SpinDashMax - Config.SpinDashMin) * self.spinCharge
+				self.velocity = dir * power
+			end
+			self.charging = false
+			self.spinCharge = 0
+			self.rolling = true
+		end
+		return
+	end
+
+	if self.input.rollHeld and not self.rolling and not self.boosting then
+		local speed = self.velocity.Magnitude
+		if speed < Config.SpinDashMaxStartSpeed then
+			self.charging = true
+			self.spinCharge = 0
+		elseif speed >= Config.RollMinSpeed then
+			self.rolling = true
+		end
+	end
+end
+
+function Controller:UpdateBoostAndHeat(dt: number)
+	local speed = self.velocity.Magnitude
+	local want = self.input.boostHeld and not self.charging and self.heat > 0
+	if want and not self.boosting and self.heat < Config.BoostMinHeat then
+		want = false
+	end
+	self.boosting = want
+
+	if self.boosting then
+		self.heat = math.max(0, self.heat - Config.BoostDrain * dt)
+		self.rolling = false
+		if self.grounded then
+			local dir = (if speed > 1 then self.velocity / speed else nil)
+				or safeUnit(projectOnPlane(self.facing, self.up), nil)
+			if dir and speed < Config.BoostSpeed then
+				self.velocity = dir * math.min(Config.BoostSpeed, speed + Config.BoostAccel * dt)
+			end
+		else
+			-- Air boost pushes along your horizontal heading. Flying straight up
+			-- (off the top of a wall) has no real heading, so it only slows the fall.
+			local h = flatten(self.velocity)
+			local hs = h.Magnitude
+			if hs > 20 and hs < Config.BoostSpeed then
+				h = (h / hs) * math.min(Config.BoostSpeed, hs + Config.BoostAccel * dt)
+			end
+			local vy = self.velocity.Y
+			if vy < 0 then
+				vy *= math.max(0, 1 - Config.BoostAirHold * dt)
+			end
+			self.velocity = Vector3.new(h.X, vy, h.Z)
+		end
+	else
+		local over = speed - Config.HeatSpeedThreshold
+		if over > 0 then
+			self.heat = math.min(1, self.heat + over / Config.HeatSpeedRange * Config.HeatFillRate * dt)
+		else
+			self.heat = math.max(0, self.heat - Config.HeatCoolRate * dt)
+		end
+	end
+end
+
+function Controller:GroundMovement(dt: number, wish: Vector3)
+	local n = self.up
+	local vel = projectOnPlane(self.velocity, n)
+
+	-- Gravity along the slope: this is what makes momentum matter
+	local gTan = projectOnPlane(Vector3.new(0, -Config.Gravity, 0), n)
+	local slope = Config.SlopeFactor
+	if self.rolling then
+		slope *= if gTan:Dot(vel) > 0 then Config.RollSlopeDown else Config.RollSlopeUp
+	end
+	if not self.charging then
+		vel += gTan * slope * dt
+	end
+
+	local speed = vel.Magnitude
+	local dir = if speed > 0.05 then vel / speed else nil
+	local amount = wish.Magnitude
+	local w = if amount > 0.05 then wish / amount else nil
+
+	if self.charging then
+		-- braking handled in UpdateRollAndCharge
+	elseif self.rolling then
+		if w and dir then
+			dir = rotateToward(dir, w, n, Config.RollTurnRate * dt)
+		end
+		speed = math.max(0, speed - Config.RollFriction * dt)
+		if speed < Config.RollEndSpeed then
+			self.rolling = false
+		end
+	elseif w then
+		if not dir or speed < 3 then
+			dir = w
+			speed += Config.Accel * amount * dt
+		else
+			local along = w:Dot(dir)
+			if along < -0.5 and not self.boosting then
+				speed = math.max(0, speed - Config.Decel * dt)
+			else
+				local t = math.clamp(speed / Config.TopSpeed, 0, 1)
+				local rate = Config.TurnRateSlow + (Config.TurnRateFast - Config.TurnRateSlow) * t
+				dir = rotateToward(dir, w, n, rate * dt)
+				if speed < Config.TopSpeed and not self.boosting then
+					speed = math.min(Config.TopSpeed, speed + Config.Accel * amount * dt)
+				end
+			end
+		end
+	elseif not self.boosting then
+		speed = math.max(0, speed - Config.Friction * dt)
+	end
+
+	if dir then
+		vel = safeUnit(projectOnPlane(dir, n), dir) * speed
+	else
+		vel = Vector3.zero
+	end
+
+	-- Guide surfaces (loops, corkscrews): lock direction to the part's LookVector
+	local part = self.groundPart
+	if part and part:GetAttribute("MomentumGuide") and vel.Magnitude > 1 then
+		local look = safeUnit(projectOnPlane(part.CFrame.LookVector, n), nil)
+		if look then
+			local sign = if vel:Dot(look) >= 0 then 1 else -1
+			vel = look * sign * vel.Magnitude
+		end
+	end
+
+	self.velocity = vel
+end
+
+function Controller:AirMovement(dt: number, wish: Vector3)
+	local vel = self.velocity + Vector3.new(0, -Config.Gravity * dt, 0)
+	if wish.Magnitude > 0.05 then
+		local h = flatten(vel)
+		local cap = math.max(h.Magnitude, Config.TopSpeed)
+		local nh = h + flatten(wish) * Config.AirAccel * dt
+		if nh.Magnitude > cap then
+			nh = nh.Unit * cap
+		end
+		vel = Vector3.new(nh.X, vel.Y, nh.Z)
+	end
+	if vel.Y < -Config.TerminalVelocity then
+		vel = Vector3.new(vel.X, -Config.TerminalVelocity, vel.Z)
+	end
+	self.velocity = vel
+end
+
+-- Sweep the body sphere along `motion`, sliding along walls and climbing onto
+-- surfaces that are close enough in angle to the one we're on.
+function Controller:MoveAndCollide(motion: Vector3)
+	for _ = 1, 4 do
+		local len = motion.Magnitude
+		if len < 1e-4 then
+			return
+		end
+		local up = if self.grounded then self.up else WORLD_UP
+		local center = self.position + up * Config.BodyOffset
+		local hit = Workspace:Spherecast(center, Config.BodyRadius, motion, self.rayParams)
+		if not hit then
+			self.position += motion
+			return
+		end
+
+		local dir = motion / len
+		local travel = math.max(0, hit.Distance - Config.Skin)
+		self.position += dir * travel
+		local rest = motion - dir * travel
+		local nrm = hit.Normal
+
+		if self.grounded and nrm:Dot(self.up) >= Config.TransitionMinDot then
+			self:SetGround(nrm, hit.Instance)
+			rest = safeUnit(projectOnPlane(rest, nrm), Vector3.zero) * rest.Magnitude
+		elseif not self.grounded and nrm.Y >= Config.LandMinNormalY and self.velocity:Dot(nrm) < 0 then
+			self:Land(nrm, hit.Instance)
+			rest = projectOnPlane(rest, nrm)
+		else
+			local into = self.velocity:Dot(nrm)
+			if into < 0 then
+				self.velocity -= nrm * into
+			end
+			rest = projectOnPlane(rest, nrm)
+			self.position += nrm * Config.Skin
+		end
+		motion = rest
+	end
+end
+
+function Controller:ProbeGround(dt: number)
+	local n = self.up
+	local reach = self.hipHeight + Config.SnapDistance + self.velocity.Magnitude * dt * 0.5
+	local hit = Workspace:Raycast(self.position + n, -n * (reach + 1), self.rayParams)
+	if hit and hit.Normal:Dot(n) >= Config.SnapMinDot then
+		self.position = hit.Position + hit.Normal * self.hipHeight
+		self:SetGround(hit.Normal, hit.Instance)
+		if self.up.Y < Config.SteepSurfaceY and self.velocity.Magnitude < Config.MinWallSpeed then
+			self:Detach(true)
+		end
+	else
+		self:Detach(false)
+	end
+end
+
+function Controller:ProbeLanding(dt: number)
+	if self.airGrace > 0 then
+		return
+	end
+	local fall = math.max(0, -self.velocity.Y) * dt
+	local hit = Workspace:Raycast(self.position + WORLD_UP, -WORLD_UP * (1 + self.hipHeight + fall + 0.05), self.rayParams)
+	if hit and hit.Normal.Y >= Config.LandMinNormalY and self.velocity:Dot(hit.Normal) <= 0 then
+		self.position = hit.Position + hit.Normal * self.hipHeight
+		self:Land(hit.Normal, hit.Instance)
+	end
+end
+
+-- Move onto a new ground surface keeping our speed (Sonic-style surface transitions).
+function Controller:SetGround(n: Vector3, part: Instance?)
+	if n ~= self.up then
+		local speed = self.velocity.Magnitude
+		self.velocity = safeUnit(projectOnPlane(self.velocity, n), Vector3.zero) * speed
+	end
+	self.up = n
+	self.groundPart = part
+	self.grounded = true
+end
+
+-- Touch down from the air: the part of our velocity going into the surface is lost.
+function Controller:Land(n: Vector3, part: Instance?)
+	self.velocity = projectOnPlane(self.velocity, n)
+	self.up = n
+	self.groundPart = part
+	self.grounded = true
+	self.jumping = false
+	self.ball = false
+	self.rolling = self.input.rollHeld and self.velocity.Magnitude >= Config.RollMinSpeed
+end
+
+function Controller:Detach(pushOff: boolean)
+	if pushOff then
+		self.velocity += self.up * Config.DetachPush
+		self.position += self.up * 0.2
+	end
+	self.grounded = false
+	self.groundPart = nil
+	self.airGrace = 0.15
+	self.rolling = false
+end
+
+function Controller:Respawn()
+	self.position = self.spawnPosition + Vector3.new(0, 2, 0)
+	self.velocity = Vector3.zero
+	self.facing = self.spawnFacing
+	self.up = WORLD_UP
+	self.visualUp = WORLD_UP
+	self.grounded = false
+	self.groundPart = nil
+	self.rolling = false
+	self.charging = false
+	self.boosting = false
+	self.ball = false
+	self.heat = 0
+	self.respawnCount = (self.respawnCount or 0) + 1
+end
+
+-- Write our simulated state to the character. Called every frame before physics.
+function Controller:Apply()
+	local up = self.visualUp
+	local fwd = safeUnit(projectOnPlane(self.facing, up), nil)
+		or safeUnit(projectOnPlane(self.root.CFrame.LookVector, up), nil)
+		or safeUnit(projectOnPlane(Vector3.xAxis, up), Vector3.zAxis)
+	local right = fwd:Cross(up).Unit
+	self.root.CFrame = CFrame.fromMatrix(self.position, right, up, -fwd)
+	self.root.AssemblyLinearVelocity = self.velocity
+	self.root.AssemblyAngularVelocity = Vector3.zero
+end
+
+return Controller
+]=====])
+script(f, 'ModuleScript', 'Hud', [=====[-- Speedometer, heat meter and a controls hint.
+
+local Config = require(script.Parent.Config)
+
+local Hud = {}
+Hud.__index = Hud
+
+local function label(parent, props)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Font = Enum.Font.GothamBlack
+	l.TextColor3 = Color3.fromRGB(255, 235, 210)
+	l.TextStrokeTransparency = 0.4
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	for k, v in props do
+		l[k] = v
+	end
+	l.Parent = parent
+	return l
+end
+
+function Hud.new(playerGui: PlayerGui)
+	local self = setmetatable({}, Hud)
+
+	local old = playerGui:FindFirstChild("MomentumHud")
+	if old then
+		old:Destroy()
+	end
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "MomentumHud"
+	gui.ResetOnSpawn = false
+	gui.IgnoreGuiInset = true
+
+	local panel = Instance.new("Frame")
+	panel.BackgroundTransparency = 1
+	panel.AnchorPoint = Vector2.new(0, 1)
+	panel.Position = UDim2.new(0, 24, 1, -24)
+	panel.Size = UDim2.fromOffset(340, 110)
+	panel.Parent = gui
+
+	self.speed = label(panel, { Text = "0", TextSize = 48, Size = UDim2.new(1, 0, 0, 50) })
+	label(panel, {
+		Text = "STUDS / SEC",
+		TextSize = 14,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.fromOffset(0, 50),
+		Size = UDim2.new(1, 0, 0, 16),
+	})
+	self.state = label(panel, {
+		Text = "",
+		TextSize = 16,
+		Font = Enum.Font.GothamBold,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Position = UDim2.fromOffset(0, 50),
+		Size = UDim2.new(1, 0, 0, 16),
+		TextColor3 = Color3.fromRGB(255, 160, 80),
+	})
+
+	local bar = Instance.new("Frame")
+	bar.Position = UDim2.new(0, 0, 1, -22)
+	bar.Size = UDim2.new(1, 0, 0, 22)
+	bar.BackgroundColor3 = Color3.fromRGB(35, 12, 10)
+	bar.BorderSizePixel = 0
+	bar.Parent = panel
+	Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 6)
+	local stroke = Instance.new("UIStroke", bar)
+	stroke.Color = Color3.fromRGB(255, 120, 40)
+	stroke.Thickness = 2
+	self.barStroke = stroke
+
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.fromScale(0, 1)
+	fill.BackgroundColor3 = Color3.new(1, 1, 1)
+	fill.BorderSizePixel = 0
+	fill.Parent = bar
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 6)
+	local gradient = Instance.new("UIGradient", fill)
+	gradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 20, 10)),
+		ColorSequenceKeypoint.new(0.6, Color3.fromRGB(255, 110, 20)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 240, 160)),
+	})
+	self.fill = fill
+
+	-- Marker showing the minimum heat needed to start a boost
+	local mark = Instance.new("Frame")
+	mark.Size = UDim2.new(0, 2, 1, 0)
+	mark.Position = UDim2.fromScale(Config.BoostMinHeat, 0)
+	mark.BackgroundColor3 = Color3.fromRGB(255, 240, 200)
+	mark.BackgroundTransparency = 0.3
+	mark.BorderSizePixel = 0
+	mark.Parent = bar
+
+	self.heatLabel = label(bar, {
+		Text = "HEAT",
+		TextSize = 14,
+		Font = Enum.Font.GothamBold,
+		Position = UDim2.fromOffset(8, 0),
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 2,
+	})
+
+	label(gui, {
+		Text = "WASD move   Space jump   Hold Q spin-dash / roll   Shift boost   Right-drag camera   R respawn",
+		TextSize = 14,
+		Font = Enum.Font.GothamMedium,
+		Position = UDim2.fromOffset(16, 52),
+		Size = UDim2.new(1, -32, 0, 18),
+		TextTransparency = 0.15,
+	})
+
+	gui.Parent = playerGui
+	self.gui = gui
+	self.t = 0
+	return self
+end
+
+function Hud:Update(ctrl, dt: number)
+	if not ctrl then
+		return
+	end
+	self.t += dt
+	local speed = ctrl.velocity.Magnitude
+	self.speed.Text = tostring(math.floor(speed + 0.5))
+	self.fill.Size = UDim2.fromScale(ctrl.heat, 1)
+
+	local state
+	if ctrl.charging then
+		state = string.format("CHARGING %d%%", math.floor(ctrl.spinCharge * 100))
+	elseif ctrl.boosting then
+		state = "BOOST"
+	elseif ctrl.rolling then
+		state = "ROLLING"
+	elseif not ctrl.grounded then
+		state = "AIR"
+	elseif ctrl.up.Y < Config.SteepSurfaceY then
+		state = "WALL RUN"
+	else
+		state = ""
+	end
+	self.state.Text = state
+
+	local ready = ctrl.heat >= Config.BoostMinHeat
+	self.heatLabel.Text = if ctrl.boosting then "HEAT  >> BOOSTING" elseif ready then "HEAT  (Shift to boost)" else "HEAT"
+	local pulse = if ctrl.boosting then 0.5 + 0.5 * math.sin(self.t * 30) else 0
+	self.barStroke.Color = Color3.fromRGB(255, 120, 40):Lerp(Color3.fromRGB(255, 245, 200), pulse)
+end
+
+return Hud
+]=====])
+script(f, 'ModuleScript', 'InputState', [=====[-- Keyboard and gamepad input, collected into one table the controller reads.
+--   Move: WASD / arrows / left stick
+--   Jump: Space / A
+--   Spin-dash & roll: Q, LeftCtrl or C / X or B
+--   Boost: LeftShift or E / R2 or Y
+--   Respawn: R / Select
+
+local UserInputService = game:GetService("UserInputService")
+
+local InputState = {}
+InputState.__index = InputState
+
+local GAMEPAD = Enum.UserInputType.Gamepad1
+
+local function anyKey(keys)
+	for _, key in keys do
+		if UserInputService:IsKeyDown(key) then
+			return true
+		end
+	end
+	return false
+end
+
+local function anyButton(buttons)
+	for _, button in buttons do
+		if UserInputService:IsGamepadButtonDown(GAMEPAD, button) then
+			return true
+		end
+	end
+	return false
+end
+
+function InputState.new()
+	local self = setmetatable({}, InputState)
+	self.state = {
+		move = Vector2.zero,
+		jumpHeld = false,
+		jumpPressed = false,
+		rollHeld = false,
+		boostHeld = false,
+	}
+	self.stick = Vector2.zero
+	self.respawnRequested = false
+
+	UserInputService.InputBegan:Connect(function(io, processed)
+		if processed then
+			return
+		end
+		if io.KeyCode == Enum.KeyCode.Space or io.KeyCode == Enum.KeyCode.ButtonA then
+			self.state.jumpPressed = true
+		elseif io.KeyCode == Enum.KeyCode.R or io.KeyCode == Enum.KeyCode.ButtonSelect then
+			self.respawnRequested = true
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(io)
+		if io.KeyCode == Enum.KeyCode.Thumbstick1 then
+			local p = Vector2.new(io.Position.X, io.Position.Y)
+			self.stick = if p.Magnitude > 0.2 then p else Vector2.zero
+		end
+	end)
+
+	return self
+end
+
+function InputState:Update()
+	local s = self.state
+	if UserInputService:GetFocusedTextBox() then
+		s.move = Vector2.zero
+		s.jumpHeld, s.rollHeld, s.boostHeld = false, false, false
+		return
+	end
+
+	local x, y = 0, 0
+	if anyKey({ Enum.KeyCode.W, Enum.KeyCode.Up }) then y += 1 end
+	if anyKey({ Enum.KeyCode.S, Enum.KeyCode.Down }) then y -= 1 end
+	if anyKey({ Enum.KeyCode.D, Enum.KeyCode.Right }) then x += 1 end
+	if anyKey({ Enum.KeyCode.A, Enum.KeyCode.Left }) then x -= 1 end
+	local move = Vector2.new(x, y)
+	if move.Magnitude > 1 then
+		move = move.Unit
+	end
+	if self.stick.Magnitude > move.Magnitude then
+		move = self.stick
+	end
+	s.move = move
+
+	s.jumpHeld = anyKey({ Enum.KeyCode.Space }) or anyButton({ Enum.KeyCode.ButtonA })
+	s.rollHeld = anyKey({ Enum.KeyCode.Q, Enum.KeyCode.LeftControl, Enum.KeyCode.C })
+		or anyButton({ Enum.KeyCode.ButtonX, Enum.KeyCode.ButtonB })
+	s.boostHeld = anyKey({ Enum.KeyCode.LeftShift, Enum.KeyCode.E })
+		or anyButton({ Enum.KeyCode.ButtonR2, Enum.KeyCode.ButtonY })
+end
+
+return InputState
+]=====])
+script(f, 'ModuleScript', 'RunCycle', [=====[-- Procedural, speed-driven run cycle for R15 characters.
+-- Instead of playing a fixed animation, every frame this poses the joints
+-- (the Transform of each Motor6D, or AnimationConstraint on newer avatars) from a gait cycle whose cadence, stride and posture all
+-- follow the controller's speed:
+--   standing  -> idle breathing
+--   0-20      -> walk: short stride, relaxed arms, upright
+--   20-90     -> run: long stride, high knee lift, pumping arms, forward lean, bounce
+--   90+       -> sprint: arms swept back, deep lean, legs at full cadence
+-- In the air it blends to a fall pose. Tuning lives in Config (RunCycle* values).
+
+local Config = require(script.Parent.Config)
+
+local RunCycle = {}
+RunCycle.__index = RunCycle
+
+local JOINTS = {
+	Root = "LowerTorso",
+	Waist = "UpperTorso",
+	Neck = "Head",
+	LeftShoulder = "LeftUpperArm",
+	RightShoulder = "RightUpperArm",
+	LeftElbow = "LeftLowerArm",
+	RightElbow = "RightLowerArm",
+	LeftHip = "LeftUpperLeg",
+	RightHip = "RightUpperLeg",
+	LeftKnee = "LeftLowerLeg",
+	RightKnee = "RightLowerLeg",
+	LeftAnkle = "LeftFoot",
+	RightAnkle = "RightFoot",
+}
+
+local function lerp(a: number, b: number, t: number): number
+	return a + (b - a) * t
+end
+
+local function smooth(t: number): number
+	t = math.clamp(t, 0, 1)
+	return t * t * (3 - 2 * t)
+end
+
+local function rot(x: number, y: number, z: number): CFrame
+	return CFrame.fromEulerAnglesXYZ(x, y, z)
+end
+
+-- Returns nil for rigs it can't drive (R6), so the caller can fall back.
+function RunCycle.new(character: Model)
+	local motors = {}
+	for name, partName in JOINTS do
+		local part = character:FindFirstChild(partName)
+		local joint = part and part:FindFirstChild(name)
+		if not (joint and (joint:IsA("Motor6D") or joint:IsA("AnimationConstraint"))) then
+			return nil
+		end
+		motors[name] = joint
+	end
+	local self = setmetatable({}, RunCycle)
+	self.motors = motors
+	self.animator = character:FindFirstChildWhichIsA("Animator", true)
+	self.phase = 0
+	self.time = 0
+	self.air = 0
+	self.speed = 0
+	self.weight = 0 -- fades the pose in after Reset (e.g. leaving the spin-ball)
+	return self
+end
+
+-- Target pose for every joint, from the gait at this speed.
+function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
+	local C = Config
+	local t = self.time
+	local pose = {}
+
+	-- Blend weights
+	local move = smooth(speed / C.RunCycleWalkSpeed) -- 0 standing, 1 walking
+	local run = smooth((speed - C.RunCycleWalkSpeed) / (C.RunCycleRunSpeed - C.RunCycleWalkSpeed))
+	local sprint = smooth((speed - C.RunCycleSprintSpeed) / C.RunCycleSprintBlend)
+
+	local s = math.sin(self.phase)
+	local c = math.cos(self.phase)
+
+	-- Legs: hips swing opposite each other; the knee folds while that leg swings forward
+	local hipAmp = lerp(0.45, 0.95, run) + 0.15 * sprint
+	local kneeAmp = lerp(0.55, 1.7, run) + 0.3 * sprint
+	local hipL = s * hipAmp * move
+	local hipR = -s * hipAmp * move
+	local kneeL = -(0.08 + kneeAmp * math.max(0, c)) * move
+	local kneeR = -(0.08 + kneeAmp * math.max(0, -c)) * move
+	local ankleL = (0.25 * s - 0.2 * run * math.max(0, -c)) * move
+	local ankleR = (-0.25 * s - 0.2 * run * math.max(0, c)) * move
+
+	-- Arms: counter-swing at walk/run, swept back at sprint
+	local armAmp = lerp(0.35, 0.9, run) * move
+	local swingL = -s * armAmp
+	local swingR = s * armAmp
+	local sweptBack = -1.15
+	local shoulderLX = lerp(swingL, sweptBack + 0.08 * s, sprint)
+	local shoulderRX = lerp(swingR, sweptBack - 0.08 * s, sprint)
+	local shoulderOut = lerp(0.05, 0.2, sprint)
+	local elbowL = lerp(lerp(0.15, 1.5, run) * move + 0.1, 0.25, sprint)
+	local elbowR = elbowL
+
+	-- Torso: lean into speed, twist against the hips, bounce on each footfall
+	local lean = -(lerp(0.04, 0.28, run) * move + 0.22 * sprint)
+	local twist = 0.18 * s * run * (1 - 0.5 * sprint)
+	local bounce = (math.abs(c) - 0.5) * lerp(0.08, 0.35, run) * move
+	local breathe = (1 - move) * 0.03 * math.sin(t * 2.2)
+
+	pose.Root = CFrame.new(0, bounce, 0) * rot(0, -twist * 0.5, 0)
+	pose.Waist = rot(lean + breathe, twist, 0)
+	pose.Neck = rot(-lean * 0.7 - breathe, -twist * 0.8, 0)
+	pose.LeftShoulder = rot(shoulderLX, 0, -shoulderOut)
+	pose.RightShoulder = rot(shoulderRX, 0, shoulderOut)
+	pose.LeftElbow = rot(elbowL, 0, 0)
+	pose.RightElbow = rot(elbowR, 0, 0)
+	pose.LeftHip = rot(hipL, 0, 0)
+	pose.RightHip = rot(hipR, 0, 0)
+	pose.LeftKnee = rot(kneeL, 0, 0)
+	pose.RightKnee = rot(kneeR, 0, 0)
+	pose.LeftAnkle = rot(ankleL, 0, 0)
+	pose.RightAnkle = rot(ankleR, 0, 0)
+
+	-- Air: arms out for balance, one knee tucked, flail a little while falling
+	local a = self.air
+	if a > 0.001 then
+		local falling = math.clamp(-verticalSpeed / 60, 0, 1)
+		local flail = 0.15 * falling * math.sin(t * 14)
+		local air = {
+			Root = CFrame.identity,
+			Waist = rot(-0.1, 0, 0),
+			Neck = rot(0.15, 0, 0),
+			LeftShoulder = rot(0.3 + flail, 0, -1.2),
+			RightShoulder = rot(0.3 - flail, 0, 1.2),
+			LeftElbow = rot(0.5, 0, 0),
+			RightElbow = rot(0.5, 0, 0),
+			LeftHip = rot(0.7, 0, 0),
+			RightHip = rot(-0.25, 0, 0),
+			LeftKnee = rot(-1.2, 0, 0),
+			RightKnee = rot(-0.4, 0, 0),
+			LeftAnkle = rot(0.2, 0, 0),
+			RightAnkle = rot(0.2, 0, 0),
+		}
+		for name, cf in pose do
+			pose[name] = cf:Lerp(air[name], a)
+		end
+	end
+
+	return pose
+end
+
+function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalSpeed: number)
+	self.time += dt
+	local C = Config
+	-- Smooth the speed (not the pose) so gait changes ease in without damping the swing
+	self.speed += (speed - self.speed) * (1 - math.exp(-C.RunCycleSmoothing * dt))
+	speed = self.speed
+	-- Cadence rises quickly at first, then levels off so top speeds don't strobe
+	local cadence = C.RunCycleMinCadence
+		+ (C.RunCycleMaxCadence - C.RunCycleMinCadence) * (1 - math.exp(-speed / C.RunCycleCadenceSpeed))
+	if grounded then
+		self.phase = (self.phase + dt * cadence * 2 * math.pi) % (2 * math.pi)
+	end
+	self.air += ((if grounded then 0 else 1) - self.air) * (1 - math.exp(-10 * dt))
+
+	-- Anything the Animator is still playing (avatar idles, emotes) would fight us
+	if self.animator then
+		for _, track in self.animator:GetPlayingAnimationTracks() do
+			track:Stop(0)
+		end
+	end
+
+	self.weight += (1 - self.weight) * (1 - math.exp(-10 * dt))
+	local pose = self:Pose(speed, grounded, verticalSpeed)
+	for name, joint in self.motors do
+		joint.Transform = CFrame.identity:Lerp(pose[name], self.weight)
+	end
+end
+
+-- Clear the pose (e.g. while curled into the spin-ball); it fades back in afterwards.
+function RunCycle:Reset()
+	self.weight = 0
+	for _, joint in self.motors do
+		joint.Transform = CFrame.identity
+	end
+end
+
+return RunCycle
+]=====])
+end
+do local f = put(game:GetService('ServerScriptService'), 'MomentumServer')
+script(f, 'Script', 'BuildTestLevel', [=====[-- Builds the test level when the server starts, unless one is already in Workspace
+-- (for example because you generated it in Edit mode to look at or tweak).
+require(script.Parent:WaitForChild("LevelBuilder")).Build()
+]=====])
+script(f, 'ModuleScript', 'LevelBuilder', [=====[-- Procedurally builds "Circle 0: The Test Pit", a small course for the momentum
+-- controller: a starting drop, a hill, a loop, a launch ramp, a long wall-run
+-- quarter pipe on the left, and a big quarter pipe at the end.
+-- The level floats over a lava sea; falling in respawns you.
+
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+
+local LevelBuilder = {}
+
+local ORIGIN = Vector3.new(0, 200, 0)
+local LEVEL_NAME = "HellTestLevel"
+
+local COLOR = {
+	rock = Color3.fromRGB(52, 30, 28),
+	track = Color3.fromRGB(96, 44, 34),
+	slope = Color3.fromRGB(120, 52, 36),
+	loop = Color3.fromRGB(140, 30, 26),
+	pipe = Color3.fromRGB(80, 36, 40),
+	trim = Color3.fromRGB(255, 110, 30),
+	lava = Color3.fromRGB(255, 85, 20),
+}
+
+local function W(x: number, y: number, z: number): Vector3
+	return ORIGIN + Vector3.new(x, y, z)
+end
+
+local function newPart(parent: Instance, props): Part
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Material = Enum.Material.Basalt
+	p.Color = COLOR.rock
+	for k, v in props do
+		p[k] = v
+	end
+	p.Parent = parent
+	return p
+end
+
+-- A plank whose top surface runs from a to b. upHint says which side is "up".
+local function plank(parent: Instance, a: Vector3, b: Vector3, upHint: Vector3, width: number, thickness: number, props)
+	local f = (b - a)
+	local len = f.Magnitude
+	f = f.Unit
+	local lateral = f:Cross(upHint).Unit
+	local up = lateral:Cross(f).Unit
+	local center = (a + b) / 2 - up * (thickness / 2)
+	local p = newPart(parent, props or {})
+	p.Size = Vector3.new(width, thickness, len + 0.6)
+	p.CFrame = CFrame.fromMatrix(center, lateral, up, -f)
+	return p
+end
+
+-- Run planks through a list of (x, y) points in the XY plane at depth z.
+local function profile(parent: Instance, pts: { Vector2 }, z: number, width: number, thickness: number, props)
+	for i = 1, #pts - 1 do
+		local p0, p1 = pts[i], pts[i + 1]
+		local d = (p1 - p0).Unit
+		plank(parent, W(p0.X, p0.Y, z), W(p1.X, p1.Y, z), Vector3.new(-d.Y, d.X, 0), width, thickness, props)
+	end
+end
+
+-- Points on a concave arc (a valley) around center (cx, cy), angles in degrees.
+local function arc(pts: { Vector2 }, cx: number, cy: number, r: number, a0: number, a1: number, n: number)
+	for i = 0, n do
+		local a = math.rad(a0 + (a1 - a0) * i / n)
+		table.insert(pts, Vector2.new(cx + r * math.sin(a), cy - r * math.cos(a)))
+	end
+end
+
+local function sign(parent: Instance, position: Vector3, text: string)
+	local post = newPart(parent, {
+		Name = "Sign",
+		Size = Vector3.new(1, 1, 1),
+		Position = position,
+		Transparency = 1,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	local gui = Instance.new("BillboardGui")
+	gui.Size = UDim2.fromOffset(320, 60)
+	gui.AlwaysOnTop = false
+	gui.MaxDistance = 400
+	gui.LightInfluence = 0
+	gui.Parent = post
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBlack
+	label.TextScaled = true
+	label.TextColor3 = Color3.fromRGB(255, 200, 140)
+	label.TextStrokeTransparency = 0.2
+	label.Text = text
+	label.Parent = gui
+end
+
+local function strip(parent: Instance, from: Vector3, to: Vector3, width: number)
+	-- Glowing floor markings. CanQuery = false so the controller ignores them.
+	local d = to - from
+	newPart(parent, {
+		Name = "Marker",
+		Size = Vector3.new(width, 0.2, d.Magnitude),
+		CFrame = CFrame.lookAt((from + to) / 2 + Vector3.new(0, 0.1, 0), to + Vector3.new(0, 0.1, 0)),
+		Material = Enum.Material.Neon,
+		Color = COLOR.trim,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+end
+
+local function buildLoop(parent: Instance, cx: number, radius: number, zStart: number, zEnd: number)
+	local segments = 48
+	local width = 12
+	local folder = Instance.new("Folder")
+	folder.Name = "Loop"
+	folder.Parent = parent
+
+	local function point(theta: number): Vector3
+		-- Ease the sideways shift in and out so you enter and leave the loop straight
+		local s = theta / (2 * math.pi)
+		local z = zStart + (zEnd - zStart) * (3 * s * s - 2 * s * s * s)
+		return W(cx + radius * math.sin(theta), radius - radius * math.cos(theta), z)
+	end
+
+	for i = 0, segments - 1 do
+		local t0 = 2 * math.pi * i / segments
+		local t1 = 2 * math.pi * (i + 1) / segments
+		local tm = (t0 + t1) / 2
+		local inward = Vector3.new(-math.sin(tm), math.cos(tm), 0)
+		local p = plank(folder, point(t0), point(t1), inward, width, 1.5, {
+			Name = "LoopSegment",
+			Color = if i % 2 == 0 then COLOR.loop else COLOR.track,
+			Material = Enum.Material.Slate,
+		})
+		-- Guide parts lock your direction to the segment so the loop's sideways
+		-- offset carries you to the exit lane.
+		p:SetAttribute("MomentumGuide", true)
+	end
+end
+
+local function setupLighting()
+	Lighting.ClockTime = 0
+	Lighting.Brightness = 1.5
+	Lighting.Ambient = Color3.fromRGB(110, 50, 40)
+	Lighting.OutdoorAmbient = Color3.fromRGB(140, 60, 45)
+	Lighting.EnvironmentDiffuseScale = 0.3
+	local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or Instance.new("Atmosphere")
+	atmosphere.Density = 0.38
+	atmosphere.Offset = 0.1
+	atmosphere.Color = Color3.fromRGB(255, 120, 70)
+	atmosphere.Decay = Color3.fromRGB(110, 25, 15)
+	atmosphere.Glare = 0.3
+	atmosphere.Haze = 2.2
+	atmosphere.Parent = Lighting
+	if not Lighting:FindFirstChild("HellBloom") then
+		local bloom = Instance.new("BloomEffect")
+		bloom.Name = "HellBloom"
+		bloom.Intensity = 0.6
+		bloom.Size = 30
+		bloom.Threshold = 1.4
+		bloom.Parent = Lighting
+	end
+end
+
+function LevelBuilder.Build(): Folder
+	local existing = Workspace:FindFirstChild(LEVEL_NAME)
+	if existing then
+		Workspace:SetAttribute("MomentumKillY", ORIGIN.Y - 30)
+		return existing
+	end
+
+	local level = Instance.new("Folder")
+	level.Name = LEVEL_NAME
+
+	-- Ground slab and lava sea
+	newPart(level, {
+		Name = "Floor",
+		Size = Vector3.new(1000, 4, 260),
+		Position = W(420, -2, 0),
+		Color = COLOR.track,
+	})
+	newPart(level, {
+		Name = "LavaSea",
+		Size = Vector3.new(2048, 1, 2048),
+		Position = W(420, -45, 0),
+		Material = Enum.Material.Neon,
+		Color = COLOR.lava,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+	})
+	strip(level, W(-60, 0, -15), W(920, 0, -15), 1)
+	strip(level, W(-60, 0, 15), W(920, 0, 15), 1)
+
+	-- 1. Start platform and the drop: 20 degree slope easing into the floor
+	newPart(level, { Name = "StartBlock", Size = Vector3.new(60, 40, 30), Position = W(-30, 20, 0) })
+	local spawnPos = W(-45, 40.5, 0)
+	local spawn = Instance.new("SpawnLocation")
+	spawn.Name = "MomentumSpawn"
+	spawn.Size = Vector3.new(8, 1, 8)
+	spawn.CFrame = CFrame.lookAt(spawnPos, spawnPos + Vector3.xAxis)
+	spawn.Anchored = true
+	spawn.Neutral = true
+	spawn.Duration = 0
+	spawn.Material = Enum.Material.Neon
+	spawn.Color = COLOR.trim
+	spawn.Parent = level
+
+	do
+		local r, slope = 40, 20
+		local arcStartY = r - r * math.cos(math.rad(slope))
+		local straightRun = (40 - arcStartY) / math.tan(math.rad(slope))
+		local cx = straightRun + r * math.sin(math.rad(slope))
+		local pts = { Vector2.new(0, 40) }
+		arc(pts, cx, r, r, -slope, 0, 8)
+		table.insert(pts, Vector2.new(cx + 6, 0))
+		profile(level, pts, 0, 30, 3, { Name = "Drop", Color = COLOR.slope })
+		sign(level, W(20, 46, 0), "THE DROP: hold W to build speed")
+	end
+
+	-- 2. Hill: 15 degrees up, plateau, 30 degrees down
+	do
+		local h = 60 * math.tan(math.rad(15))
+		local down = h / math.tan(math.rad(30))
+		profile(level, {
+			Vector2.new(200, 0),
+			Vector2.new(260, h),
+			Vector2.new(300, h),
+			Vector2.new(300 + down, 0),
+		}, 0, 30, 4, { Name = "Hill", Color = COLOR.slope })
+		newPart(level, { Name = "HillCore", Size = Vector3.new(36, h - 1, 30), Position = W(280, (h - 1) / 2, 0) })
+		sign(level, W(280, h + 10, 0), "HILL: slopes trade speed for height")
+	end
+
+	-- 3. Loop: enter on the centre line, exit 16 studs to the right
+	do
+		local cx, r = 430, 26
+		buildLoop(level, cx, r, 0, 16)
+		strip(level, W(360, 0, 0), W(428, 0, 0), 2)
+		sign(level, W(400, 14, -10), "LOOP: 85+ speed, or spin-dash / boost in")
+	end
+
+	-- 4. Launch ramp on the loop's exit lane
+	do
+		local pts = {}
+		arc(pts, 560, 30, 30, 0, 30, 6)
+		local last = pts[#pts]
+		table.insert(pts, last + Vector2.new(math.cos(math.rad(30)), math.sin(math.rad(30))) * 16)
+		profile(level, pts, 16, 24, 2, { Name = "LaunchRamp", Color = COLOR.slope })
+		sign(level, W(570, 22, 16), "LAUNCH RAMP")
+	end
+
+	-- 5. End quarter pipe: curve up into a vertical wall, then fall back in
+	do
+		local pts = {}
+		arc(pts, 760, 24, 24, 0, 90, 12)
+		table.insert(pts, Vector2.new(784, 150))
+		profile(level, pts, 0, 120, 3, { Name = "QuarterPipe", Color = COLOR.pipe })
+		-- Tall enough that you normally peel off and fall back in; if you boost
+		-- over the top you land on the ledge behind it.
+		newPart(level, { Name = "QuarterPipeBack", Size = Vector3.new(40, 150, 120), Position = W(807, 75, 0) })
+		sign(level, W(740, 30, 0), "QUARTER PIPE: go vertical, come back down")
+	end
+
+	-- 6. Wall-run pipe along the left side (negative Z) of the whole course
+	do
+		local x0, x1 = 150, 700
+		local xm, len = (x0 + x1) / 2, x1 - x0
+		local cz, cy, r = -70, 20, 20
+		local function at(a: number): Vector3
+			local rad = math.rad(a)
+			return W(xm, cy - r * math.cos(rad), cz - r * math.sin(rad))
+		end
+		local n = 12
+		for i = 0, n - 1 do
+			local a0, a1 = 90 * i / n, 90 * (i + 1) / n
+			local p0, p1 = at(a0), at(a1)
+			local inward = (W(xm, cy, cz) - (p0 + p1) / 2).Unit
+			plank(level, p0, p1, inward, len, 3, { Name = "WallRunCurve", Color = COLOR.pipe })
+		end
+		plank(level, at(90), W(xm, 80, cz - r), Vector3.zAxis, len, 3, { Name = "WallRunWall", Color = COLOR.pipe })
+		sign(level, W(180, 20, -50), "WALL RUN: steer left into the curve at speed")
+		strip(level, W(150, 0, -45), W(700, 0, -45), 1)
+	end
+
+	setupLighting()
+
+	-- Turn off any other spawns (like the Baseplate template's) so you start here.
+	for _, d in Workspace:GetDescendants() do
+		if d:IsA("SpawnLocation") and d ~= spawn then
+			d.Enabled = false
+		end
+	end
+
+	level.Parent = Workspace
+	Workspace:SetAttribute("MomentumKillY", ORIGIN.Y - 30)
+	return level
+end
+
+return LevelBuilder
+]=====])
+script(f, 'Script', 'PlayerSetup', [=====[-- Server side of the momentum controller: characters go in a collision group that
+-- doesn't physically collide with the world (the client controller does its own
+-- collision with sphere and ray casts), and shift-lock is turned off so Shift can boost.
+
+local Players = game:GetService("Players")
+local PhysicsService = game:GetService("PhysicsService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterPlayer = game:GetService("StarterPlayer")
+
+local Config = require(ReplicatedStorage:WaitForChild("Momentum"):WaitForChild("Config"))
+local GROUP = Config.CollisionGroup
+
+pcall(function()
+	PhysicsService:RegisterCollisionGroup(GROUP)
+end)
+PhysicsService:CollisionGroupSetCollidable(GROUP, "Default", false)
+PhysicsService:CollisionGroupSetCollidable(GROUP, GROUP, false)
+
+StarterPlayer.EnableMouseLockOption = false
+
+local function tag(instance: Instance)
+	if instance:IsA("BasePart") then
+		instance.CollisionGroup = GROUP
+	end
+end
+
+local function onCharacter(character: Model)
+	for _, d in character:GetDescendants() do
+		tag(d)
+	end
+	character.DescendantAdded:Connect(tag)
+end
+
+local function onPlayer(player: Player)
+	player.DevEnableMouseLock = false
+	player.CharacterAdded:Connect(onCharacter)
+	if player.Character then
+		onCharacter(player.Character)
+	end
+end
+
+Players.PlayerAdded:Connect(onPlayer)
+for _, player in Players:GetPlayers() do
+	onPlayer(player)
+end
+]=====])
+end
+do local f = put(game:GetService('StarterPlayer'):WaitForChild('StarterPlayerScripts'), 'MomentumClient')
+script(f, 'LocalScript', 'MomentumClient', [=====[-- Boots the momentum controller for the local player's character.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local Momentum = ReplicatedStorage:WaitForChild("Momentum")
+local Controller = require(Momentum:WaitForChild("Controller"))
+local ChaseCamera = require(Momentum:WaitForChild("ChaseCamera"))
+local Hud = require(Momentum:WaitForChild("Hud"))
+local CharacterFx = require(Momentum:WaitForChild("CharacterFx"))
+local InputState = require(Momentum:WaitForChild("InputState"))
+
+local player = Players.LocalPlayer
+
+-- Turn off the default movement controls if the classic PlayerModule is present.
+-- (Our Humanoid sits in the Physics state, so default input can't move it anyway.)
+local function disableDefaultControls()
+	task.spawn(function()
+		local playerModule = player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", 5)
+		if not playerModule then
+			return
+		end
+		local ok, err = pcall(function()
+			require(playerModule):GetControls():Disable()
+		end)
+		if not ok then
+			warn("[Momentum] could not disable default controls:", err)
+		end
+	end)
+end
+
+local input = InputState.new()
+local hud = Hud.new(player:WaitForChild("PlayerGui"))
+local camera = ChaseCamera.new()
+local active = nil
+
+local function stop()
+	if active then
+		active.fx:Destroy()
+		active = nil
+	end
+end
+
+-- Characters don't always spawn facing the way their SpawnLocation points, so
+-- start the controller (and camera) looking down the spawn's front instead.
+local function nearestSpawn(position: Vector3): SpawnLocation?
+	local best, bestDist = nil, 30
+	for _, d in Workspace:GetDescendants() do
+		if d:IsA("SpawnLocation") and d.Enabled then
+			local dist = (d.Position - position).Magnitude
+			if dist < bestDist then
+				best, bestDist = d, dist
+			end
+		end
+	end
+	return best
+end
+
+local function onCharacter(character: Model)
+	stop()
+	local humanoid = character:WaitForChild("Humanoid") :: Humanoid
+	local root = character:WaitForChild("HumanoidRootPart") :: BasePart
+	if not character:IsDescendantOf(Workspace) then
+		character.AncestryChanged:Wait()
+	end
+	task.wait() -- let the spawn position settle
+
+	disableDefaultControls()
+	for _, state in Enum.HumanoidStateType:GetEnumItems() do
+		if state ~= Enum.HumanoidStateType.Physics and state ~= Enum.HumanoidStateType.Dead then
+			pcall(humanoid.SetStateEnabled, humanoid, state, false)
+		end
+	end
+	humanoid.AutoRotate = false
+	humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+
+	local ctrl = Controller.new(character, humanoid, root)
+	ctrl.input = input.state
+	local spawn = nearestSpawn(root.Position)
+	if spawn then
+		ctrl:SetFacing(spawn.CFrame.LookVector)
+	end
+	local fx = CharacterFx.new(character, humanoid, root, ctrl)
+	ctrl:AddIgnore(fx.ball)
+	camera:Attach(ctrl, { character, fx.ball })
+
+	active = { ctrl = ctrl, fx = fx, character = character }
+	humanoid.Died:Connect(function()
+		if active and active.character == character then
+			stop()
+		end
+	end)
+end
+
+player.CharacterAdded:Connect(onCharacter)
+if player.Character then
+	task.spawn(onCharacter, player.Character)
+end
+
+-- Simulation runs right before physics so the root CFrame we write is what renders.
+local preSimulation = RunService.PreSimulation or RunService.Stepped
+preSimulation:Connect(function(a, b)
+	local dt = if typeof(b) == "number" then b else a
+	if not active then
+		return
+	end
+	input:Update()
+	local ctrl = active.ctrl
+	if input.respawnRequested then
+		input.respawnRequested = false
+		ctrl:Respawn()
+	end
+	local cam = Workspace.CurrentCamera
+	ctrl:Step(dt, if cam then cam.CFrame else CFrame.new())
+	ctrl:Apply()
+	active.fx:UpdatePose(dt)
+end)
+
+RunService:BindToRenderStep("MomentumCamera", Enum.RenderPriority.Camera.Value + 1, function(dt)
+	if not active then
+		return
+	end
+	camera:Update(dt)
+	active.fx:Update(dt)
+	hud:Update(active.ctrl, dt)
+end)
+]=====])
+end
+print('[Momentum] installed. Press Play (F5) to test.')
