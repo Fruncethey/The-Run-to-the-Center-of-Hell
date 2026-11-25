@@ -994,6 +994,8 @@ local Config = {
 	RunCycleOverdriveStride = 0.12, -- leg stride grows by up to 12%
 	RunCycleOverdriveLean = 0.4, -- extra forward tilt of the torso by RunCycleOverdriveSpeed, radians
 	RunCycleRunLean = 0.45, -- forward tilt of the torso at full running speed, radians
+	RunCycleSpeedLean = 0.3, -- extra forward tilt that builds from walking to running top speed, radians
+	RunCycleArmRateMax = 1.6, -- at running top speed the arms swing this many times faster than the legs
 	-- Top-speed pose: above normal running speed (boosts, slopes) the arms sweep behind the back
 	RunCycleTopStart = 100, -- starts blending in here (running tops out at 90)
 	RunCycleTopFull = 150, -- fully in by this speed
@@ -2583,6 +2585,7 @@ function RunCycle.new(character: Model)
 	end
 	self.animator = character:FindFirstChildWhichIsA("Animator", true)
 	self.phase = 0
+	self.armPhase = 0 -- the arms' own clock, which runs faster than the legs' at speed
 	self.time = 0
 	self.air = 0
 	self.speed = 0
@@ -2652,7 +2655,8 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	-- time with the stride (they hold each pose and switch quickly), and floating a little
 	-- away from the shoulders, cartoon style
 	local armAmp = lerp(0.35, 1.1, run) * x * move
-	local snap = math.sign(s) * math.abs(s) ^ lerp(1, C.RunCycleArmSnap, run)
+	local sa = math.sin(self.armPhase)
+	local snap = math.sign(sa) * math.abs(sa) ^ lerp(1, C.RunCycleArmSnap, run)
 	local shoulderLX = -snap * armAmp
 	local shoulderRX = snap * armAmp
 	local shoulderOut = lerp(0.08, 0.32, run) * move
@@ -2718,15 +2722,8 @@ function RunCycle:Overdrive(speed: number): number
 	return smooth((speed - C.TopSpeed) / math.max(1, C.RunCycleOverdriveSpeed - C.TopSpeed))
 end
 
--- Top speed (boosts, slopes): the arms sweep back behind the body and the torso
--- tips further forward, blended in by k (0 = normal run, 1 = full top-speed pose)
-function RunCycle:ApplyTopSpeed(pose, k: number)
-	local C = Config
-	local lean = C.RunCycleTopLean * k
-	local back = C.RunCycleTopArmBack + 0.06 * math.sin(self.phase * 2)
-	local out = C.RunCycleTopArmOut
-	local armL = rot(0, 0, -out) * rot(-back, 0, 0)
-	local armR = rot(0, 0, out) * rot(-back, 0, 0)
+-- Tip the torso forward by lean radians, keeping the legs under the body and the head up
+function RunCycle:ApplyLean(pose, lean: number)
 	if self.r6 then
 		-- Poses here are already in each R6 joint's frame
 		local function conv(name: string, cf: CFrame): CFrame
@@ -2738,11 +2735,30 @@ function RunCycle:ApplyTopSpeed(pose, k: number)
 		-- The legs hang from the torso, so tip them back the other way to keep them under him
 		pose["Left Hip"] = conv("Left Hip", rot(lean, 0, 0)) * pose["Left Hip"]
 		pose["Right Hip"] = conv("Right Hip", rot(lean, 0, 0)) * pose["Right Hip"]
-		pose["Left Shoulder"] = pose["Left Shoulder"]:Lerp(conv("Left Shoulder", armL), k)
-		pose["Right Shoulder"] = pose["Right Shoulder"]:Lerp(conv("Right Shoulder", armR), k)
 	else
 		pose.Waist = rot(-lean, 0, 0) * pose.Waist
 		pose.Neck = rot(lean * 0.7, 0, 0) * pose.Neck
+	end
+end
+
+-- Top speed (boosts, slopes): the arms sweep back behind the body and the torso
+-- tips further forward, blended in by k (0 = normal run, 1 = full top-speed pose)
+function RunCycle:ApplyTopSpeed(pose, k: number)
+	local C = Config
+	self:ApplyLean(pose, C.RunCycleTopLean * k)
+	local back = C.RunCycleTopArmBack + 0.06 * math.sin(self.phase * 2)
+	local out = C.RunCycleTopArmOut
+	local armL = rot(0, 0, -out) * rot(-back, 0, 0)
+	local armR = rot(0, 0, out) * rot(-back, 0, 0)
+	if self.r6 then
+		-- Poses here are already in each R6 joint's frame
+		local function conv(name: string, cf: CFrame): CFrame
+			local f = self.frames[name]
+			return f:Inverse() * cf * f
+		end
+		pose["Left Shoulder"] = pose["Left Shoulder"]:Lerp(conv("Left Shoulder", armL), k)
+		pose["Right Shoulder"] = pose["Right Shoulder"]:Lerp(conv("Right Shoulder", armR), k)
+	else
 		pose.LeftShoulder = pose.LeftShoulder:Lerp(armL, k)
 		pose.RightShoulder = pose.RightShoulder:Lerp(armR, k)
 		pose.LeftElbow = pose.LeftElbow:Lerp(rot(0.15, 0, 0), k)
@@ -2767,6 +2783,15 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 	if grounded and speed > 0.1 then
 		self.phase = (self.phase + dt * cadence * 2 * math.pi) % (2 * math.pi)
 	end
+	-- The arms keep the same motion but swing on their own clock, which runs up to
+	-- RunCycleArmRateMax times faster than the legs as you reach running top speed
+	local armBoost = smooth((speed - C.RunCycleWalkSpeed) / (C.TopSpeed - C.RunCycleWalkSpeed))
+	if armBoost <= 0 then
+		self.armPhase = self.phase
+	elseif grounded and speed > 0.1 then
+		local armRate = 1 + (C.RunCycleArmRateMax - 1) * armBoost
+		self.armPhase = (self.armPhase + dt * cadence * armRate * 2 * math.pi) % (2 * math.pi)
+	end
 	self.air += ((if grounded then 0 else 1) - self.air) * (1 - math.exp(-10 * dt))
 
 	-- Anything the Animator is still playing (avatar idles, emotes) would fight us
@@ -2780,6 +2805,11 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 	local pose = self:Pose(speed, grounded, verticalSpeed)
 	if self.r6 then
 		pose = self:ToR6(pose)
+	end
+	-- Tip further forward the faster you run
+	local runLean = C.RunCycleSpeedLean * smooth((speed - C.RunCycleWalkSpeed) / (C.TopSpeed - C.RunCycleWalkSpeed)) * (1 - self.air)
+	if runLean > 0.001 then
+		self:ApplyLean(pose, runLean)
 	end
 	-- Past normal running speed, blend into the arms-back top-speed pose
 	local top = smooth((speed - C.RunCycleTopStart) / (C.RunCycleTopFull - C.RunCycleTopStart)) * (1 - self.air)
