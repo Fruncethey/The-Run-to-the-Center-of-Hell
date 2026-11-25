@@ -106,6 +106,7 @@ local Config = {
 	RunCycleMaxCadence = 5, -- cap so the legs don't strobe at 300 speed
 	RunCycleCadenceSpeed = 70, -- how quickly cadence climbs toward the cap
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
+	RunCycleExaggeration = 1.5, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
 
 	CollisionGroup = "MomentumPlayer",
 }

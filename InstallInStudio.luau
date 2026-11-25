@@ -463,6 +463,7 @@ local Config = {
 	RunCycleMaxCadence = 5, -- cap so the legs don't strobe at 300 speed
 	RunCycleCadenceSpeed = 70, -- how quickly cadence climbs toward the cap
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
+	RunCycleExaggeration = 1.5, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
 
 	CollisionGroup = "MomentumPlayer",
 }
@@ -1760,35 +1761,44 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	local s = math.sin(self.phase)
 	local c = math.cos(self.phase)
 
-	-- Legs: hips swing opposite each other; the knee folds while that leg swings forward
-	local hipAmp = lerp(0.45, 0.95, run) + 0.15 * sprint
-	local kneeAmp = lerp(0.55, 1.7, run) + 0.3 * sprint
-	local hipL = s * hipAmp * move
-	local hipR = -s * hipAmp * move
-	local kneeL = -(0.08 + kneeAmp * math.max(0, c)) * move
-	local kneeR = -(0.08 + kneeAmp * math.max(0, -c)) * move
-	local ankleL = (0.25 * s - 0.2 * run * math.max(0, -c)) * move
-	local ankleR = (-0.25 * s - 0.2 * run * math.max(0, c)) * move
+	-- Cartoon factor: walking stays natural, running and sprinting get pushed further
+	local x = lerp(1, C.RunCycleExaggeration, run)
 
-	-- Arms: counter-swing at walk/run, swept back at sprint
-	local armAmp = lerp(0.35, 0.9, run) * move
+	-- Legs: hips swing opposite each other; the knee folds while that leg swings forward.
+	-- The forward swing is bigger than the back swing, for high cartoon knees.
+	local hipAmp = (lerp(0.45, 0.95, run) + 0.15 * sprint) * x
+	local kneeAmp = (lerp(0.55, 1.7, run) + 0.3 * sprint) * x
+	local function hip(v: number): number
+		return if v > 0 then math.min(1.7, v * lerp(1, 1.3, run)) else v
+	end
+	local hipL = hip(s * hipAmp) * move
+	local hipR = hip(-s * hipAmp) * move
+	local kneeL = -math.min(2.6, 0.08 + kneeAmp * math.max(0, c)) * move
+	local kneeR = -math.min(2.6, 0.08 + kneeAmp * math.max(0, -c)) * move
+	local ankleL = (0.25 * s - 0.2 * run * x * math.max(0, -c)) * move
+	local ankleR = (-0.25 * s - 0.2 * run * x * math.max(0, c)) * move
+
+	-- Arms: big pumping counter-swing at run, swept far back at sprint
+	local armAmp = lerp(0.35, 0.9, run) * x * move
 	local swingL = -s * armAmp
 	local swingR = s * armAmp
-	local sweptBack = -1.15
-	local shoulderLX = lerp(swingL, sweptBack + 0.08 * s, sprint)
-	local shoulderRX = lerp(swingR, sweptBack - 0.08 * s, sprint)
-	local shoulderOut = lerp(0.05, 0.2, sprint)
-	local elbowL = lerp(lerp(0.15, 1.5, run) * move + 0.1, 0.25, sprint)
+	local sweptBack = -1.15 - 0.35 * (x - 1)
+	local shoulderLX = lerp(swingL, sweptBack + 0.1 * x * s, sprint)
+	local shoulderRX = lerp(swingR, sweptBack - 0.1 * x * s, sprint)
+	local shoulderOut = lerp(0.05, 0.2, sprint) * x
+	local elbowL = lerp(lerp(0.15, 1.5, run) * move + 0.1, 0.25, sprint) * lerp(1, 1.15, run * (x - 1))
 	local elbowR = elbowL
 
-	-- Torso: lean into speed, twist against the hips, bounce on each footfall
-	local lean = -(lerp(0.04, 0.28, run) * move + 0.22 * sprint)
-	local twist = 0.18 * s * run * (1 - 0.5 * sprint)
-	local bounce = (math.abs(c) - 0.5) * lerp(0.08, 0.35, run) * move
+	-- Torso: lean into speed, twist against the hips, bounce on each footfall,
+	-- and rock the hips side to side
+	local lean = -(lerp(0.04, 0.28, run) * move + 0.22 * sprint) * x
+	local twist = 0.18 * s * run * (1 - 0.5 * sprint) * x
+	local bounce = (math.abs(c) - 0.5) * lerp(0.08, 0.35, run) * x * x * move
+	local sway = 0.08 * s * run * (x - 1) * 2
 	local breathe = (1 - move) * 0.03 * math.sin(t * 2.2)
 
-	pose.Root = CFrame.new(0, bounce, 0) * rot(0, -twist * 0.5, 0)
-	pose.Waist = rot(lean + breathe, twist, 0)
+	pose.Root = CFrame.new(0, bounce, 0) * rot(0, -twist * 0.5, sway)
+	pose.Waist = rot(lean + breathe, twist, -sway * 0.6)
 	pose.Neck = rot(-lean * 0.7 - breathe, -twist * 0.8, 0)
 	pose.LeftShoulder = rot(shoulderLX, 0, -shoulderOut)
 	pose.RightShoulder = rot(shoulderRX, 0, shoulderOut)

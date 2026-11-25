@@ -129,6 +129,11 @@ Anything tagged `HomingTarget` can be locked onto, so later things like soul-cha
 Step rate climbs from 1.4 to 5 steps per second and levels off so the legs don't strobe at 300 speed.
 Tune it with the `RunCycle*` values in `Config.luau`.
 
+Running and sprinting are cartoon-exaggerated by `RunCycleExaggeration` (1.5): bigger strides with high knees
+(forward swing larger than the back swing), wider arm pumps, arms swept further back at sprint, a deeper lean,
+a bigger bounce on each footfall and a side-to-side hip rock. Walking stays natural. Set it to 1 for the
+realistic gait, or around 2 for very rubbery legs.
+
 ## Known limits
 
 - The run cycle is drawn on your own screen only. Joint poses set by a script don't replicate, so in multiplayer
