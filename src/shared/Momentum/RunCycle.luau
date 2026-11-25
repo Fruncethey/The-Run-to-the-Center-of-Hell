@@ -163,7 +163,9 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	local sweptBack = -1.15 - 0.35 * (x - 1)
 	local shoulderLX = lerp(swingL, sweptBack + 0.1 * x * s, sprint)
 	local shoulderRX = lerp(swingR, sweptBack - 0.1 * x * s, sprint)
-	local shoulderOut = lerp(0.05, 0.2, sprint) * x
+	-- Arms splay out to the sides as well as swinging, flaring wider at each end of the swing
+	local spread = lerp(0.05, C.RunCycleArmSpread, run) * move
+	local shoulderOut = (spread + 0.2 * math.abs(s) * run + 0.1 * sprint) * x
 	local elbowL = lerp(lerp(0.15, 1.5, run) * move + 0.1, 0.25, sprint) * lerp(1, 1.15, run * (x - 1))
 	local elbowR = elbowL
 
@@ -178,8 +180,9 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	pose.Root = CFrame.new(0, bounce, 0) * rot(0, -twist * 0.5, sway)
 	pose.Waist = rot(lean + breathe, twist, -sway * 0.6)
 	pose.Neck = rot(-lean * 0.7 - breathe, -twist * 0.8, 0)
-	pose.LeftShoulder = rot(shoulderLX, 0, -shoulderOut)
-	pose.RightShoulder = rot(shoulderRX, 0, shoulderOut)
+	-- Swing first, then splay the whole swing outward, so spreading doesn't shrink the swing
+	pose.LeftShoulder = rot(0, 0, -shoulderOut) * rot(shoulderLX, 0, 0)
+	pose.RightShoulder = rot(0, 0, shoulderOut) * rot(shoulderRX, 0, 0)
 	pose.LeftElbow = rot(elbowL, 0, 0)
 	pose.RightElbow = rot(elbowR, 0, 0)
 	pose.LeftHip = rot(hipL, 0, 0)
