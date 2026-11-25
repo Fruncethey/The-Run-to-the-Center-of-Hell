@@ -129,8 +129,9 @@ Anything tagged `HomingTarget` can be locked onto, so later things like soul-cha
 | 100 to 150 and up | Sprint: arms swept back, deep lean, full stride |
 | In the air | Arms out for balance, one knee tucked, a little flail when falling fast |
 
-While running the arms also splay out to the sides (`RunCycleArmSpread`, 0.5 radians), flaring wider at each end of
-the swing, instead of only swinging forward and back.
+While running, the arms work cartoon style: one is thrust forward while the other is flung back, and they hold
+those poses and snap across in time with the stride (`RunCycleArmSnap`). They also float a little away from the
+shoulders, sliding toward where they point (`RunCycleArmDetach`, 0.6 studs).
 
 Step rate climbs from 1.4 to 5 steps per second and levels off so the legs don't strobe at 300 speed.
 Tune it with the `RunCycle*` values in `Config.luau`.

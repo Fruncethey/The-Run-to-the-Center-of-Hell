@@ -975,7 +975,8 @@ local Config = {
 	RunCycleMaxCadence = 5, -- cap so the legs don't strobe at 300 speed
 	RunCycleCadenceSpeed = 70, -- how quickly cadence climbs toward the cap
 	RunCycleSmoothing = 8, -- how fast the gait follows speed changes
-	RunCycleArmSpread = 0.5, -- radians the arms splay out to the sides while running
+	RunCycleArmDetach = 0.6, -- studs the running arms float away from the shoulders
+	RunCycleArmSnap = 0.4, -- below 1 the arms hold forward/back and switch quickly (1 = smooth swing)
 	RunCycleExaggeration = 1.5, -- cartoon factor for the run and sprint (1 = realistic, 2 = very rubbery)
 
 	-- Afterimages: glowing ghost copies left behind at very high speed
@@ -2366,16 +2367,15 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	local ankleL = (0.25 * s - 0.2 * run * x * math.max(0, -c)) * move
 	local ankleR = (-0.25 * s - 0.2 * run * x * math.max(0, c)) * move
 
-	-- Arms: big pumping counter-swing at run, swept far back at sprint
-	local armAmp = lerp(0.35, 0.9, run) * x * move
-	local swingL = -s * armAmp
-	local swingR = s * armAmp
-	local sweptBack = -1.15 - 0.35 * (x - 1)
-	local shoulderLX = lerp(swingL, sweptBack + 0.1 * x * s, sprint)
-	local shoulderRX = lerp(swingR, sweptBack - 0.1 * x * s, sprint)
-	-- Arms splay out to the sides as well as swinging, flaring wider at each end of the swing
-	local spread = lerp(0.05, C.RunCycleArmSpread, run) * move
-	local shoulderOut = (spread + 0.2 * math.abs(s) * run + 0.1 * sprint) * x
+	-- Arms: one thrust forward while the other is flung back, snapping between the two in
+	-- time with the stride (they hold each pose and switch quickly), and floating a little
+	-- away from the shoulders, cartoon style
+	local armAmp = lerp(0.35, 1.1, run) * x * move
+	local snap = math.sign(s) * math.abs(s) ^ lerp(1, C.RunCycleArmSnap, run)
+	local shoulderLX = -snap * armAmp
+	local shoulderRX = snap * armAmp
+	local shoulderOut = 0.08 * move
+	local detach = C.RunCycleArmDetach * run * move
 	local elbowL = lerp(lerp(0.15, 1.5, run) * move + 0.1, 0.25, sprint) * lerp(1, 1.15, run * (x - 1))
 	local elbowR = elbowL
 
@@ -2390,9 +2390,9 @@ function RunCycle:Pose(speed: number, grounded: boolean, verticalSpeed: number)
 	pose.Root = CFrame.new(0, bounce, 0) * rot(0, -twist * 0.5, sway)
 	pose.Waist = rot(lean + breathe, twist, -sway * 0.6)
 	pose.Neck = rot(-lean * 0.7 - breathe, -twist * 0.8, 0)
-	-- Swing first, then splay the whole swing outward, so spreading doesn't shrink the swing
-	pose.LeftShoulder = rot(0, 0, -shoulderOut) * rot(shoulderLX, 0, 0)
-	pose.RightShoulder = rot(0, 0, shoulderOut) * rot(shoulderRX, 0, 0)
+	-- Detached arms slide toward where they point: forward arm out in front, back arm behind
+	pose.LeftShoulder = CFrame.new(0, -0.15 * detach, snap * detach) * rot(0, 0, -shoulderOut) * rot(shoulderLX, 0, 0)
+	pose.RightShoulder = CFrame.new(0, -0.15 * detach, -snap * detach) * rot(0, 0, shoulderOut) * rot(shoulderRX, 0, 0)
 	pose.LeftElbow = rot(elbowL, 0, 0)
 	pose.RightElbow = rot(elbowR, 0, 0)
 	pose.LeftHip = rot(hipL, 0, 0)
