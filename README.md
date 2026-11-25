@@ -136,12 +136,13 @@ shoulders, sliding toward where they point (`RunCycleArmDetach`, 0.04 studs).
 At speed the whole body banks into turns like a bike, more the faster and tighter the turn
 (`RunCycleBank`, capped at `RunCycleBankMax` = 0.48 radians).
 
-Step rate climbs from 1.4 to 2.45 cycles per second by running top speed (90).
+Step rate scales linearly with speed (`RunCycleMinCadence` + speed * `RunCycleCadencePerSpeed`): about 0.9 cycles/s
+at a walk (20), 2.5 at running top speed (90), 4.2 while boosting (170), and 7.5 at `MaxSpeed` (320), with only a high
+anti-strobe ceiling (`RunCycleMaxCadence`, 12).
 
-Above top speed (boosts, slopes) the same gait gets small extras so the legs keep up, fully in by
-`RunCycleOverdriveSpeed` (200): about 1 more step cycle per second (`RunCycleOverdriveCadence`), a 12% longer
-leg stride (`RunCycleOverdriveStride`) and a much deeper forward tilt (`RunCycleOverdriveLean`). The arm motion
-never changes with it.
+Above top speed (boosts, slopes) the same gait gets small extras so the pose keeps up, fully in by
+`RunCycleOverdriveSpeed` (200): a 12% longer leg stride (`RunCycleOverdriveStride`) and a much deeper forward tilt
+(`RunCycleOverdriveLean`). The arm motion never changes with it.
 
 The torso tilts forward with speed: about 27 degrees at a full run (`RunCycleRunLean`), 38 degrees at 155 and
 about 57 degrees by 200.
