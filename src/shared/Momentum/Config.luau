@@ -39,6 +39,7 @@ local Config = {
 	BodyRadius = 1.2,
 	BodyOffset = 0.5,
 	Skin = 0.05,
+	FallRespawnDepth = 100, -- falling this far below where you last stood respawns you
 	MaxStepDistance = 2, -- physics substeps so fast movement never tunnels
 	VisualUpRate = 12,
 

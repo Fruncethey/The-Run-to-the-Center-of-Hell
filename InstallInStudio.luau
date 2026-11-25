@@ -918,6 +918,7 @@ local Config = {
 	BodyRadius = 1.2,
 	BodyOffset = 0.5,
 	Skin = 0.05,
+	FallRespawnDepth = 100, -- falling this far below where you last stood respawns you
 	MaxStepDistance = 2, -- physics substeps so fast movement never tunnels
 	VisualUpRate = 12,
 
@@ -1131,6 +1132,12 @@ function Controller.new(character: Model, humanoid: Humanoid, root: BasePart)
 	params.IgnoreWater = true
 	self.rayParams = params
 
+	local overlap = OverlapParams.new()
+	overlap.FilterType = Enum.RaycastFilterType.Exclude
+	overlap.FilterDescendantsInstances = { character }
+	overlap.RespectCanCollide = true
+	self.overlapParams = overlap
+
 	return self
 end
 
@@ -1155,6 +1162,7 @@ function Controller:AddIgnore(instance: Instance)
 	local list = self.rayParams.FilterDescendantsInstances
 	table.insert(list, instance)
 	self.rayParams.FilterDescendantsInstances = list
+	self.overlapParams.FilterDescendantsInstances = list
 end
 
 function Controller:GetSpeed(): number
@@ -1261,6 +1269,7 @@ function Controller:Step(dt: number, camCF: CFrame)
 	local sdt = dt / steps
 	for _ = 1, steps do
 		self:MoveAndCollide(self.velocity * sdt)
+		self:PushOutOfWalls()
 		if self.grounded then
 			self:ProbeGround(sdt)
 		else
@@ -1283,6 +1292,9 @@ function Controller:Step(dt: number, camCF: CFrame)
 
 	local killY = Workspace:GetAttribute("MomentumKillY")
 	if typeof(killY) == "number" and self.position.Y < killY then
+		self:Respawn()
+	elseif not self.grounded and self.lastGroundY and self.position.Y < self.lastGroundY - Config.FallRespawnDepth then
+		-- Missed a jump: respawn now instead of landing on some lower part of the course
 		self:Respawn()
 	end
 end
@@ -1656,6 +1668,41 @@ function Controller:MoveAndCollide(motion: Vector3)
 	end
 end
 
+-- A sweep that starts touching a part doesn't see it, so running along a wall
+-- that slowly angles into your path (the outside of a curve) can let the body
+-- creep into it a little each step and come out the other side. Push the body
+-- sphere back out of any wall-like block it overlaps.
+function Controller:PushOutOfWalls()
+	local up = if self.grounded then self.up else WORLD_UP
+	local center = self.position + up * Config.BodyOffset
+	local radius = Config.BodyRadius
+	for _, part in Workspace:GetPartBoundsInRadius(center, radius, self.overlapParams) do
+		if part:IsA("Part") and part.Shape == Enum.PartType.Block then
+			local half = part.Size / 2
+			local loc = part.CFrame:PointToObjectSpace(center)
+			local closest = Vector3.new(
+				math.clamp(loc.X, -half.X, half.X),
+				math.clamp(loc.Y, -half.Y, half.Y),
+				math.clamp(loc.Z, -half.Z, half.Z)
+			)
+			local away = loc - closest
+			local dist = away.Magnitude
+			if dist > 1e-4 and dist < radius then
+				local nrm = part.CFrame:VectorToWorldSpace(away / dist)
+				-- Walls only: floors and ceilings are handled by the ground probe
+				if math.abs(nrm:Dot(up)) < 0.5 then
+					self.position += nrm * (radius - dist + Config.Skin)
+					center = self.position + up * Config.BodyOffset
+					local into = self.velocity:Dot(nrm)
+					if into < 0 then
+						self.velocity -= nrm * into
+					end
+				end
+			end
+		end
+	end
+end
+
 function Controller:ProbeGround(dt: number)
 	local n = self.up
 	local reach = self.hipHeight + Config.SnapDistance + self.velocity.Magnitude * dt * 0.5
@@ -1692,6 +1739,7 @@ function Controller:SetGround(n: Vector3, part: Instance?)
 	self.up = n
 	self.groundPart = part
 	self.grounded = true
+	self.lastGroundY = self.position.Y
 end
 
 -- Touch down from the air: the part of our velocity going into the surface is lost.
@@ -1730,6 +1778,7 @@ function Controller:Respawn()
 	self.visualUp = WORLD_UP
 	self.grounded = false
 	self.groundPart = nil
+	self.lastGroundY = nil
 	self.rolling = false
 	self.charging = false
 	self.boosting = false
@@ -2819,6 +2868,41 @@ function TutorialTracker:BindLevel()
 	end
 end
 
+-- Bind again if more zones or checkpoints have streamed in, keeping progress
+function TutorialTracker:Rescan()
+	local level = self.level
+	local zones = level:FindFirstChild("TutorialZones")
+	local cps = level:FindFirstChild("Checkpoints")
+	local goal = level:FindFirstChild("GoalGate")
+	local nCps = 0
+	if cps then
+		for _, child in cps:GetChildren() do
+			if child:FindFirstChild("Trigger") then
+				nCps += 1
+			end
+		end
+	end
+	local nZones = if zones then #zones:GetChildren() else 0
+	local hasGoal = goal ~= nil and goal:FindFirstChild("Trigger") ~= nil
+	if nZones == #self.zones and nCps == #self.checkpoints and hasGoal == (self.goal ~= nil) then
+		return
+	end
+	local reached = {}
+	for _, cp in self.checkpoints do
+		if cp.reached then
+			reached[cp.index] = true
+		end
+	end
+	self.level = nil
+	self:BindLevel()
+	for _, cp in self.checkpoints do
+		if reached[cp.index] then
+			cp.reached = true
+			setGlowColor(cp.glows, COLOR_ACTIVE)
+		end
+	end
+end
+
 function TutorialTracker:HasCourse(): boolean
 	return #self.zones > 0 or self.totalCheckpoints > 0 or self.goal ~= nil
 end
@@ -2830,6 +2914,12 @@ function TutorialTracker:Update(dt: number)
 	end
 	if not self.level then
 		return
+	end
+	-- With streaming on, parts of the course can arrive after we first bound to it
+	self.rescanTimer = (self.rescanTimer or 0) - dt
+	if self.rescanTimer <= 0 then
+		self.rescanTimer = 1
+		self:Rescan()
 	end
 
 	local ctrl = self.ctrl
@@ -3287,20 +3377,27 @@ end)
 
 spawnAll()
 ]=====])
-script(f, 'ModuleScript', 'LevelBuilder', [=====[-- Procedurally builds "Circle 0: The Descent Gate", a full 8-stage tutorial
--- course teaching every mechanic of the momentum controller in order:
---   1. Run & Jump        (acceleration, tap vs hold jump, forgiving gaps)
---   2. Roll & Momentum   (downhill drop, rolling 2x slope gain, hill, imps)
---   3. Spin-Dash & Loop  (charge & rev spin-dash, guided vertical loop)
---   4. Air Dash & Control(launch ramp over lava chasm, mid-air steering)
---   5. Homing Chain      (4-imp aerial chain climbing to a high terrace)
---   6. Stomp Dive        (mid-air stomp through an imp onto a 30-deg speed ramp)
---   7. Boost & Wall Run  (heat builder, boost imp gauntlet, curved wall-run pipe)
---   8. The Finale        (boost dip, giant loop, sky jump, and the Descent Gate)
+script(f, 'ModuleScript', 'LevelBuilder', [=====[-- Procedurally builds "Circle 0: The Descent Gate", the tutorial level: a long,
+-- twisting speed course over a lava sea that teaches every mechanic in order and
+-- offers a choice of routes along the way.
 --
--- Also places Checkpoints, TutorialZones, GoalGate, and invisible "EnemySpawn"
--- markers (filled by EnemyService). Floats over a lava sea; falling respawns
--- you at your latest checkpoint.
+-- The main route is laid out like a turtle drawing a road: straights, banked
+-- curves, eased slopes, gaps, launch ramps, loops, a helix and a corkscrew. Branch
+-- routes are ribbons that peel off the main road (sideways and up or down) and
+-- merge back further on.
+--
+--   1. Run & Jump        hurdles and a gap, then a sweeping right-hander
+--   2. Roll & Momentum   a long drop, rolling hills, and a HIGH RIDGE branch above
+--   3. Spin-Dash & Loop  a loop, then a guided helix spiralling down
+--   4. Air Dash          launch ramp over a chasm, or the long LOW BRIDGE around it
+--   5. Homing Chain      imps over a gap up to a terrace, or the winding CLIMB ramp
+--   6. Stomp & Descent   a 30 degree stomp slope, then a twisting canyon descent
+--   7. Boost & Wall Run  boost gauntlet with a wall-run pipe, then a FORK around a lava pillar
+--   8. Finale            dip, giant loop, corkscrew, sky jump and the Descent Gate
+--
+-- Also places Checkpoints, TutorialZones, GoalGate and invisible "EnemySpawn"
+-- markers (filled by EnemyService). Falling into the lava respawns you at your
+-- latest checkpoint.
 
 local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
@@ -3310,22 +3407,28 @@ local LevelBuilder = {}
 local ORIGIN = Vector3.new(0, 200, 0)
 local LEVEL_NAME = "HellTestLevel"
 
+local ROAD = 40 -- main road width
+local BRANCH = 30 -- branch road width
+local STEP = 8 -- longest road piece on straights, studs
+local TURN_STEP = math.rad(5) -- curve resolution
+
 local COLOR = {
 	rock = Color3.fromRGB(48, 28, 28),
 	pillar = Color3.fromRGB(36, 22, 24),
 	track = Color3.fromRGB(92, 42, 34),
+	track2 = Color3.fromRGB(104, 48, 38),
+	branch = Color3.fromRGB(70, 36, 46),
 	slope = Color3.fromRGB(122, 52, 36),
 	loop = Color3.fromRGB(145, 32, 26),
 	pipe = Color3.fromRGB(78, 34, 42),
 	hurdle = Color3.fromRGB(72, 32, 32),
 	trim = Color3.fromRGB(255, 110, 30),
+	branchTrim = Color3.fromRGB(255, 60, 90),
 	gold = Color3.fromRGB(255, 195, 80),
 	lava = Color3.fromRGB(255, 85, 20),
 }
 
-local function W(x: number, y: number, z: number): Vector3
-	return ORIGIN + Vector3.new(x, y, z)
-end
+local Y = Vector3.yAxis
 
 local function newPart(parent: Instance, props): Part
 	local p = Instance.new("Part")
@@ -3341,101 +3444,52 @@ local function newPart(parent: Instance, props): Part
 	return p
 end
 
+local function deco(props)
+	props.CanCollide = false
+	props.CanQuery = false
+	props.CanTouch = false
+	return props
+end
+
+local function ease(t: number): number
+	t = math.clamp(t, 0, 1)
+	return (1 - math.cos(math.pi * t)) / 2
+end
+
+local function rotateAround(v: Vector3, axis: Vector3, angle: number): Vector3
+	return CFrame.fromAxisAngle(axis, angle):VectorToWorldSpace(v)
+end
+
 -- A plank whose top surface runs from a to b. upHint says which side is "up".
-local function plank(parent: Instance, a: Vector3, b: Vector3, upHint: Vector3, width: number, thickness: number, props)
+-- extra lengthens it at both ends so curved runs leave no gaps on the outside.
+local function plank(parent: Instance, a: Vector3, b: Vector3, upHint: Vector3, width: number, thickness: number, props, extra: number?)
 	local f = b - a
 	local len = f.Magnitude
+	if len < 0.05 then
+		return nil
+	end
 	f = f.Unit
-	local lateral = f:Cross(upHint).Unit
+	local lateral = f:Cross(upHint)
+	if lateral.Magnitude < 1e-3 then
+		lateral = f:Cross(Vector3.xAxis)
+	end
+	lateral = lateral.Unit
 	local up = lateral:Cross(f).Unit
 	local center = (a + b) / 2 - up * (thickness / 2)
 	local p = newPart(parent, props or {})
-	p.Size = Vector3.new(width, thickness, len + 0.6)
+	p.Size = Vector3.new(width, thickness, len + 0.6 + (extra or 0))
 	p.CFrame = CFrame.fromMatrix(center, lateral, up, -f)
 	return p
 end
 
--- Run planks through a list of (x, y) points in the XY plane at depth z.
-local function profile(parent: Instance, pts: { Vector2 }, z: number, width: number, thickness: number, props)
-	for i = 1, #pts - 1 do
-		local p0, p1 = pts[i], pts[i + 1]
-		local d = (p1 - p0).Unit
-		plank(parent, W(p0.X, p0.Y, z), W(p1.X, p1.Y, z), Vector3.new(-d.Y, d.X, 0), width, thickness, props)
-	end
-end
-
--- Points on a concave arc (a valley) around center (cx, cy), angles in degrees.
-local function arc(pts: { Vector2 }, cx: number, cy: number, r: number, a0: number, a1: number, n: number)
-	for i = 0, n do
-		local a = math.rad(a0 + (a1 - a0) * i / n)
-		table.insert(pts, Vector2.new(cx + r * math.sin(a), cy - r * math.cos(a)))
-	end
-end
-
--- Points on a convex arc (a crest / hill top) around center (cx, cy), angles in degrees.
--- At a = 0 the tangent is flat (+X); positive angles curve smoothly downward.
-local function crestArc(pts: { Vector2 }, cx: number, cy: number, r: number, a0: number, a1: number, n: number)
-	for i = 0, n do
-		local a = math.rad(a0 + (a1 - a0) * i / n)
-		table.insert(pts, Vector2.new(cx + r * math.sin(a), cy + r * math.cos(a)))
-	end
-end
-
-local function strip(parent: Instance, from: Vector3, to: Vector3, width: number, color: Color3?)
-	-- Glowing floor markings. CanQuery = false so the controller ignores them.
-	local d = to - from
-	if d.Magnitude < 0.05 then
-		return
-	end
-	newPart(parent, {
-		Name = "Marker",
-		Size = Vector3.new(width, 0.2, d.Magnitude),
-		CFrame = CFrame.lookAt((from + to) / 2 + Vector3.new(0, 0.1, 0), to + Vector3.new(0, 0.1, 0)),
-		Material = Enum.Material.Neon,
-		Color = color or COLOR.trim,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
-end
-
--- Flat track deck with glowing side trim strips.
-local function deck(parent: Instance, name: string, x0: number, x1: number, yTop: number, zCenter: number, width: number, thickness: number?)
-	local th = thickness or 6
-	local len = x1 - x0
-	local part = newPart(parent, {
-		Name = name,
-		Size = Vector3.new(len, th, width),
-		Position = W((x0 + x1) / 2, yTop - th / 2, zCenter),
-		Color = COLOR.track,
-	})
-	local halfW = width / 2 - 0.8
-	strip(parent, W(x0, yTop, zCenter - halfW), W(x1, yTop, zCenter - halfW), 0.8)
-	strip(parent, W(x0, yTop, zCenter + halfW), W(x1, yTop, zCenter + halfW), 0.8)
-	return part
-end
-
--- Glowing neon chevron arrows pointing in +X along a flat surface.
-local function chevrons(parent: Instance, xStart: number, yTop: number, zCenter: number, count: number, spacing: number, color: Color3?)
-	local c = color or COLOR.gold
-	for i = 0, count - 1 do
-		local x = xStart + i * spacing
-		strip(parent, W(x - 4, yTop, zCenter - 4.5), W(x + 2, yTop, zCenter), 1.0, c)
-		strip(parent, W(x - 4, yTop, zCenter + 4.5), W(x + 2, yTop, zCenter), 1.0, c)
-	end
-end
-
 -- Floating world sign (supplements the HUD tutorial banner).
 local function sign(parent: Instance, position: Vector3, text: string)
-	local post = newPart(parent, {
+	local post = newPart(parent, deco({
 		Name = "Sign",
 		Size = Vector3.new(1, 1, 1),
 		Position = position,
 		Transparency = 1,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
+	}))
 	local gui = Instance.new("BillboardGui")
 	gui.Size = UDim2.fromOffset(340, 62)
 	gui.AlwaysOnTop = false
@@ -3455,16 +3509,13 @@ end
 
 -- Invisible marker; EnemyService spawns an enemy here.
 local function enemySpawn(parent: Instance, position: Vector3, patrol: Vector3?, patrolSpeed: number?)
-	local marker = newPart(parent, {
+	local marker = newPart(parent, deco({
 		Name = "EnemySpawn",
 		Shape = Enum.PartType.Ball,
 		Size = Vector3.one * 2,
 		Position = position,
 		Transparency = 1,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
+	}))
 	if patrol then
 		marker:SetAttribute("Patrol", patrol)
 	end
@@ -3474,270 +3525,530 @@ local function enemySpawn(parent: Instance, position: Vector3, patrol: Vector3?,
 	return marker
 end
 
--- Invisible box volume for HUD tutorial stage prompts.
-local function tutorialZone(
-	parent: Instance,
-	order: number,
-	title: string,
-	hint: string,
-	x0: number,
-	x1: number,
-	yMin: number,
-	yMax: number,
-	zMin: number,
-	zMax: number
-)
-	local zone = newPart(parent, {
-		Name = string.format("Zone%d", order),
-		Size = Vector3.new(x1 - x0, yMax - yMin, zMax - zMin),
-		Position = W((x0 + x1) / 2, (yMin + yMax) / 2, (zMin + zMax) / 2),
-		Transparency = 1,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
-	zone:SetAttribute("ZoneOrder", order)
-	zone:SetAttribute("ZoneTitle", title)
-	zone:SetAttribute("ZoneHint", hint)
-	return zone
+-- =============================================================================
+-- The road: a list of samples {pos, up, s, build, guide, look} laid out by a turtle
+-- =============================================================================
+
+local Road = {}
+Road.__index = Road
+
+function Road.new(start: Vector3, yaw: number)
+	local self = setmetatable({}, Road)
+	self.pos = start
+	self.yaw = yaw -- 0 = +X, positive turns left (toward -Z)
+	self.s = 0
+	self.samples = {}
+	self.marks = {}
+	self:Add(start, Y, true, false, nil)
+	return self
 end
 
--- Glowing obsidian checkpoint arch; lights up cyan when crossed.
-local function buildCheckpoint(parent: Instance, index: number, label: string, x: number, yFloor: number, zCenter: number, width: number)
+function Road:Heading(): Vector3
+	return Vector3.new(math.cos(self.yaw), 0, -math.sin(self.yaw))
+end
+
+function Road:Right(): Vector3
+	return self:Heading():Cross(Y)
+end
+
+-- build: whether the piece leading up to this sample is solid road
+function Road:Add(pos: Vector3, up: Vector3, build: boolean, guide: boolean, opts)
+	local last = self.samples[#self.samples]
+	local step = if last then (pos - last.pos).Magnitude else 0
+	self.s += step
+	-- Curbs carry on 50 studs past the end of a curve, so you can't slide off its exit
+	local curb = opts and opts.curb
+	if curb then
+		self.curbSide, self.curbLeft = curb, 50
+	elseif self.curbSide and self.curbLeft > 0 and build and not guide then
+		curb = self.curbSide
+		self.curbLeft -= step
+	else
+		self.curbSide = nil
+	end
+	table.insert(self.samples, {
+		pos = pos,
+		up = up,
+		s = self.s,
+		build = build,
+		guide = guide,
+		color = opts and opts.color,
+		curb = curb,
+		name = opts and opts.name,
+		width = opts and opts.width,
+	})
+	self.pos = pos
+end
+
+-- Remember the current distance under a name (for placing things later)
+function Road:Mark(name: string)
+	self.marks[name] = self.s
+	return self.s
+end
+
+-- Straight run, optionally changing height with an eased (S-shaped) profile so it
+-- blends smoothly into whatever comes before and after.
+function Road:Straight(len: number, dy: number?, opts)
+	dy = dy or 0
+	local h = self:Heading()
+	local start = self.pos
+	local n = math.max(1, math.ceil(len / STEP))
+	for i = 1, n do
+		local t = i / n
+		local p = start + h * len * t + Y * dy * ease(t)
+		local o = opts
+		if opts and opts.taper then
+			-- Narrow or widen the road (funnels into loops and the corkscrew)
+			o = table.clone(opts)
+			o.width = opts.taper[1] + (opts.taper[2] - opts.taper[1]) * t
+		end
+		self:Add(p, Y, true, opts ~= nil and opts.guide == true, o)
+	end
+end
+
+-- Horizontal curve. angle in degrees, positive = left. bank tilts the road into the turn.
+function Road:Curve(angleDeg: number, radius: number, dy: number?, opts)
+	dy = dy or 0
+	opts = opts or {}
+	local angle = math.rad(angleDeg)
+	local dir = if angle >= 0 then 1 else -1
+	local start = self.pos
+	local yaw0 = self.yaw
+	local right0 = self:Right()
+	local center = start - right0 * radius * dir
+	local n = math.max(2, math.ceil(math.abs(angle) / TURN_STEP))
+	local bank = math.rad(opts.bank or 0)
+	for i = 1, n do
+		local t = i / n
+		self.yaw = yaw0 + angle * t
+		local h = self:Heading()
+		local right = h:Cross(Y)
+		local p = center + right * radius * dir + Y * dy * ease(t)
+		p = Vector3.new(p.X, start.Y + dy * ease(t), p.Z)
+		-- Bank fades in and out at the ends of the curve
+		local b = bank * math.sin(math.pi * t) ^ 0.6
+		local up = rotateAround(Y, h, -b * dir) -- tilt toward the inside of the turn
+		self:Add(p, up, true, opts.guide == true, opts)
+	end
+	self.yaw = yaw0 + angle
+end
+
+-- Jump gap: no road. dy changes height, lat shifts sideways (positive = right).
+function Road:Gap(len: number, dy: number?, lat: number?)
+	local p = self.pos + self:Heading() * len + Y * (dy or 0) + self:Right() * (lat or 0)
+	self:Add(p, Y, false, false, nil)
+end
+
+-- Launch ramp: curves up from flat to angleDeg over len (a circular arc).
+function Road:Ramp(len: number, angleDeg: number, opts)
+	local a = math.rad(angleDeg)
+	local r = len / math.sin(a)
+	local h = self:Heading()
+	local start = self.pos
+	local n = 6
+	for i = 1, n do
+		local t = a * i / n
+		local p = start + h * r * math.sin(t) + Y * r * (1 - math.cos(t))
+		local up = Y * math.cos(t) - h * math.sin(t)
+		self:Add(p, up, true, false, opts)
+	end
+end
+
+-- Vertical loop with a sideways shift so you exit beside the entry (positive = right).
+-- The loop is narrower than the road and the shift is wider than the loop, so the
+-- way out never overlaps the way in.
+function Road:Loop(radius: number, shift: number, width: number)
+	local h = self:Heading()
+	local right = self:Right()
+	local start = self.pos
+	local n = 48
+	for i = 1, n do
+		local th = 2 * math.pi * i / n
+		local s = i / n
+		local side = right * shift * (3 * s * s - 2 * s * s * s)
+		local p = start + h * radius * math.sin(th) + Y * radius * (1 - math.cos(th)) + side
+		local up = Y * math.cos(th) - h * math.sin(th)
+		self:Add(p, up, true, true, { color = if i % 2 == 0 then COLOR.loop else COLOR.track, width = width })
+	end
+end
+
+-- Corkscrew: the road twists a full turn around the direction of travel.
+function Road:Corkscrew(len: number, radius: number, width: number)
+	local h = self:Heading()
+	local start = self.pos
+	local axis = start + Y * radius
+	local n = 40
+	for i = 1, n do
+		local t = i / n
+		local phi = 2 * math.pi * t
+		local up = rotateAround(Y, h, phi)
+		local p = axis + h * len * t - up * radius
+		self:Add(p, up, true, true, { color = if i % 2 == 0 then COLOR.loop else COLOR.track, width = width })
+	end
+end
+
+-- Sample of the road at distance s: position, heading (flat), right, up
+function Road:At(s: number)
+	local samples = self.samples
+	for i = 2, #samples do
+		local a, b = samples[i - 1], samples[i]
+		if b.s >= s then
+			local t = if b.s > a.s then (s - a.s) / (b.s - a.s) else 0
+			local pos = a.pos:Lerp(b.pos, t)
+			local d = b.pos - a.pos
+			local flat = Vector3.new(d.X, 0, d.Z)
+			local h = if flat.Magnitude > 1e-3 then flat.Unit else Vector3.xAxis
+			return pos, h, h:Cross(Y), a.up:Lerp(b.up, t).Unit
+		end
+	end
+	local last = samples[#samples]
+	local prev = samples[#samples - 1]
+	local d = last.pos - prev.pos
+	local h = Vector3.new(d.X, 0, d.Z).Unit
+	return last.pos, h, h:Cross(Y), last.up
+end
+
+-- A world point beside / above the road at distance s
+function Road:Point(s: number, lat: number?, height: number?): Vector3
+	local pos, _, right = self:At(s)
+	return pos + right * (lat or 0) + Y * (height or 0)
+end
+
+-- A flat-oriented frame on the road at s, looking along the road
+function Road:Frame(s: number, lat: number?, height: number?): CFrame
+	local _, h = self:At(s)
+	local p = self:Point(s, lat, height)
+	return CFrame.lookAt(p, p + h)
+end
+
+-- Turn a list of points (with ups) into road planks with glowing edge trim.
+local function buildRibbon(parent: Instance, pts, width: number, props, trimColor: Color3?)
+	-- Curb corner points, worked out once per sample so neighbouring curb pieces meet exactly
+	local function edge(k: number, side: number): Vector3
+		local c = pts[k]
+		local prev, nxt = pts[math.max(1, k - 1)], pts[math.min(#pts, k + 1)]
+		local f = nxt.pos - prev.pos
+		local right = f:Cross(c.up)
+		right = if right.Magnitude > 1e-3 then right.Unit else Vector3.zAxis
+		return c.pos + right * side * ((c.width or width) / 2 + 1) + c.up * 4.5
+	end
+	for i = 2, #pts do
+		local a, b = pts[i - 1], pts[i]
+		if b.build ~= false then
+			local f = b.pos - a.pos
+			-- Bend at each end, so the outside of curves stays closed
+			local bend = 0
+			for _, j in { i - 2, i + 1 } do
+				local c = pts[j]
+				if c then
+					local g = if j < i then a.pos - c.pos else c.pos - b.pos
+					if g.Magnitude > 0.05 and f.Magnitude > 0.05 then
+						bend = math.max(bend, math.acos(math.clamp(g.Unit:Dot(f.Unit), -1, 1)))
+					end
+				end
+			end
+			local w = b.width or width
+			local extra = w * math.sin(math.min(bend, 0.6)) * 0.6
+			local up = (a.up + b.up).Unit
+			local p = plank(parent, a.pos, b.pos, up, w, 3, {
+				Name = b.name or props.Name,
+				Color = b.color or props.Color or (if i % 2 == 0 then COLOR.track else COLOR.track2),
+				Material = props.Material or Enum.Material.Basalt,
+			}, extra)
+			if p then
+				if b.guide then
+					-- Guide parts lock your direction to the road (loops, helix, corkscrew)
+					p:SetAttribute("MomentumGuide", true)
+				end
+				local cf, size = p.CFrame, p.Size
+				for _, side in { -1, 1 } do
+					newPart(parent, deco({
+						Name = "Trim",
+						Size = Vector3.new(0.8, 0.14, size.Z),
+						CFrame = cf * CFrame.new(side * (size.X / 2 - 0.9), size.Y / 2 + 0.05, 0),
+						Material = Enum.Material.Neon,
+						Color = trimColor or COLOR.trim,
+					}))
+					-- Curbs keep you on the outside of fast curves
+					-- and funnel you into loops. Each runs edge to edge, so a narrowing road
+					-- gets a smoothly angled wall instead of a staircase.
+					if b.curb == side or b.curb == 0 then
+						local ea, eb = edge(i - 1, side), edge(i, side)
+						-- Overlap only forward: a piece poking back past the joint would stick out
+						-- in front of the previous one, and you'd start a step already touching it
+						local dir = (eb - ea).Unit
+						newPart(parent, {
+							Name = "Curb",
+							Size = Vector3.new(2, 9, (eb - ea).Magnitude + 0.75),
+							-- Kept upright (not tilted with the bank), so every piece's inner face
+							-- lines up exactly with the next one's
+							CFrame = CFrame.lookAt((ea + eb) / 2 + dir * 0.375, eb + dir, Y),
+							Color = COLOR.pillar,
+						})
+					end
+				end
+			end
+		end
+	end
+end
+
+-- A branch route: peels off the road at s0, follows keyframes {s, lat, y}
+-- (lat sideways from the road, y absolute height above ORIGIN), and rejoins at the last key.
+-- Each pair of keys is blended with an eased curve, so slopes start and end smoothly.
+local function branchPoints(road, keys, step: number?)
+	step = step or 6
+	local pts = {}
+	local s0, s1 = keys[1].s, keys[#keys].s
+	local n = math.ceil((s1 - s0) / step)
+	local k = 1
+	for i = 0, n do
+		local s = s0 + (s1 - s0) * i / n
+		while k < #keys - 1 and s > keys[k + 1].s do
+			k += 1
+		end
+		local a, b = keys[k], keys[k + 1]
+		local t = ease((s - a.s) / (b.s - a.s))
+		local lat = a.lat + (b.lat - a.lat) * t
+		local pos, _, right = road:At(s)
+		local yA = a.y or (road:Point(a.s).Y - ORIGIN.Y)
+		local yB = b.y or (road:Point(b.s).Y - ORIGIN.Y)
+		local y = yA + (yB - yA) * t
+		local p = pos + right * lat
+		table.insert(pts, { pos = Vector3.new(p.X, ORIGIN.Y + y, p.Z), up = Y, build = true })
+	end
+	return pts
+end
+
+-- Hide the main road between two distances (used where a fork replaces it)
+local function skipRoad(road, s0: number, s1: number)
+	for _, smp in road.samples do
+		if smp.s > s0 + 0.01 and smp.s <= s1 + 0.01 then
+			smp.build = false
+		end
+	end
+end
+
+-- Invisible boxes along the road between s0 and s1 for the HUD stage prompt.
+local function tutorialZones(parent: Instance, road, order: number, title: string, hint: string, s0: number, s1: number)
+	local chunk = 90
+	local n = math.max(1, math.ceil((s1 - s0) / chunk))
+	for i = 0, n - 1 do
+		local a = s0 + (s1 - s0) * i / n
+		local b = s0 + (s1 - s0) * (i + 1) / n
+		local mid = (a + b) / 2
+		local pa, pb = road:Point(a), road:Point(b)
+		local flatLen = Vector3.new(pb.X - pa.X, 0, pb.Z - pa.Z).Magnitude
+		local cf = road:Frame(mid, 0, 40)
+		local zone = newPart(parent, deco({
+			Name = string.format("Zone%d", order),
+			Size = Vector3.new(220, 170 + math.abs(pb.Y - pa.Y), math.max(flatLen, 20) + 30),
+			CFrame = cf,
+			Transparency = 1,
+		}))
+		zone:SetAttribute("ZoneOrder", order)
+		zone:SetAttribute("ZoneTitle", title)
+		zone:SetAttribute("ZoneHint", hint)
+	end
+end
+
+-- Glowing obsidian checkpoint arch across the road; lights up cyan when crossed.
+local function buildCheckpoint(parent: Instance, road, index: number, label: string, s: number)
 	local folder = Instance.new("Folder")
 	folder.Name = string.format("Checkpoint%d", index)
 	folder:SetAttribute("CheckpointIndex", index)
 	folder:SetAttribute("CheckpointLabel", label)
 	folder.Parent = parent
 
-	local halfW = width / 2 + 1
+	local cf = road:Frame(s)
+	local halfW = ROAD / 2 + 1.5
 	local h = 22
 	for _, side in { -1, 1 } do
-		local pz = zCenter + side * halfW
-		newPart(folder, {
+		newPart(folder, deco({
 			Name = "Pillar",
 			Size = Vector3.new(3.5, h, 3.5),
-			Position = W(x, yFloor + h / 2, pz),
+			CFrame = cf * CFrame.new(side * halfW, h / 2, 0),
 			Color = COLOR.pillar,
-			CanCollide = false,
-			CanQuery = false,
-			CanTouch = false,
-		})
-		local accent = newPart(folder, {
+		}))
+		local accent = newPart(folder, deco({
 			Name = "Beacon",
-			Size = Vector3.new(4.1, h - 2, 1.2),
-			Position = W(x, yFloor + h / 2, pz),
+			Size = Vector3.new(1.2, h - 2, 4.1),
+			CFrame = cf * CFrame.new(side * halfW, h / 2, 0),
 			Material = Enum.Material.Neon,
 			Color = COLOR.trim,
-			CanCollide = false,
-			CanQuery = false,
-			CanTouch = false,
-		})
+		}))
 		accent:SetAttribute("GlowAccent", true)
 	end
-
-	newPart(folder, {
+	newPart(folder, deco({
 		Name = "Crossbar",
-		Size = Vector3.new(3.5, 3, width + 5.5),
-		Position = W(x, yFloor + h + 1, zCenter),
+		Size = Vector3.new(ROAD + 6.5, 3, 3.5),
+		CFrame = cf * CFrame.new(0, h + 1, 0),
 		Color = COLOR.pillar,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
-	local barGlow = newPart(folder, {
+	}))
+	local barGlow = newPart(folder, deco({
 		Name = "ArchGlow",
-		Size = Vector3.new(4.1, 1.1, width + 2),
-		Position = W(x, yFloor + h - 0.5, zCenter),
+		Size = Vector3.new(ROAD + 3, 1.1, 4.1),
+		CFrame = cf * CFrame.new(0, h - 0.5, 0),
 		Material = Enum.Material.Neon,
 		Color = COLOR.trim,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
+	}))
 	barGlow:SetAttribute("GlowAccent", true)
 
-	local triggerPos = W(x, yFloor + 16, zCenter)
-	local trigger = newPart(folder, {
+	local trigger = newPart(folder, deco({
 		Name = "Trigger",
-		Size = Vector3.new(16, 36, width + 12),
-		CFrame = CFrame.lookAt(triggerPos, triggerPos + Vector3.xAxis),
+		Size = Vector3.new(ROAD + 40, 50, 24),
+		CFrame = cf * CFrame.new(0, 15, 0),
 		Transparency = 1,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
-	trigger:SetAttribute("SpawnPosition", W(x, yFloor + 4, zCenter))
+	}))
+	trigger:SetAttribute("SpawnPosition", cf.Position + Y * 4)
 	return folder
 end
 
--- Monumental finish gate at the end of the tutorial course.
-local function buildGoalGate(parent: Instance, x: number, yFloor: number, zCenter: number, width: number)
+-- Monumental finish gate at the end of the course.
+local function buildGoalGate(parent: Instance, road, s: number, width: number)
 	local folder = Instance.new("Folder")
 	folder.Name = "GoalGate"
 	folder.Parent = parent
 
+	local cf = road:Frame(s)
 	local halfW = width / 2
 	local h = 44
 	for _, side in { -1, 1 } do
-		local pz = zCenter + side * halfW
 		newPart(folder, {
 			Name = "Monolith",
 			Size = Vector3.new(8, h, 8),
-			Position = W(x, yFloor + h / 2, pz),
+			CFrame = cf * CFrame.new(side * halfW, h / 2, 0),
 			Color = COLOR.pillar,
 		})
-		-- Horn spire crowning each monolith
 		newPart(folder, {
 			Name = "Spire",
 			Size = Vector3.new(5, 16, 5),
-			CFrame = CFrame.new(W(x, yFloor + h + 6, pz + side * 2)) * CFrame.Angles(side * 0.25, 0, 0),
+			CFrame = cf * CFrame.new(side * (halfW + 2), h + 6, 0) * CFrame.Angles(0, 0, -side * 0.25),
 			Color = COLOR.rock,
 		})
-		local vein = newPart(folder, {
+		local vein = newPart(folder, deco({
 			Name = "Vein",
-			Size = Vector3.new(8.6, h - 4, 2),
-			Position = W(x, yFloor + h / 2, pz),
+			Size = Vector3.new(2, h - 4, 8.6),
+			CFrame = cf * CFrame.new(side * halfW, h / 2, 0),
 			Material = Enum.Material.Neon,
 			Color = COLOR.trim,
-			CanCollide = false,
-			CanQuery = false,
-			CanTouch = false,
-		})
+		}))
 		vein:SetAttribute("GlowAccent", true)
 	end
-
 	newPart(folder, {
 		Name = "Crown",
-		Size = Vector3.new(9, 7, width + 10),
-		Position = W(x, yFloor + h + 1, zCenter),
+		Size = Vector3.new(width + 10, 7, 9),
+		CFrame = cf * CFrame.new(0, h + 1, 0),
 		Color = COLOR.pillar,
 	})
-	local crownGlow = newPart(folder, {
+	local crownGlow = newPart(folder, deco({
 		Name = "CrownGlow",
-		Size = Vector3.new(9.6, 2.2, width + 4),
-		Position = W(x, yFloor + h - 2.5, zCenter),
+		Size = Vector3.new(width + 4, 2.2, 9.6),
+		CFrame = cf * CFrame.new(0, h - 2.5, 0),
 		Material = Enum.Material.Neon,
 		Color = COLOR.trim,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
+	}))
 	crownGlow:SetAttribute("GlowAccent", true)
-
-	local curtain = newPart(folder, {
+	local curtain = newPart(folder, deco({
 		Name = "PortalCurtain",
-		Size = Vector3.new(1.2, h - 4, width - 6),
-		Position = W(x, yFloor + (h - 4) / 2, zCenter),
+		Size = Vector3.new(width - 6, h - 4, 1.2),
+		CFrame = cf * CFrame.new(0, (h - 4) / 2, 0),
 		Material = Enum.Material.Neon,
 		Color = COLOR.trim,
 		Transparency = 0.68,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
+	}))
 	curtain:SetAttribute("GlowAccent", true)
-
-	local triggerPos = W(x + 2, yFloor + 55, zCenter)
-	newPart(folder, {
+	newPart(folder, deco({
 		Name = "Trigger",
-		Size = Vector3.new(28, 120, width + 24),
-		CFrame = CFrame.lookAt(triggerPos, triggerPos + Vector3.xAxis),
+		Size = Vector3.new(width + 24, 120, 28),
+		CFrame = cf * CFrame.new(0, 55, 0),
 		Transparency = 1,
-		CanCollide = false,
-		CanQuery = false,
-		CanTouch = false,
-	})
-	sign(folder, W(x - 10, yFloor + h + 12, zCenter), "THE DESCENT GATE — FINISH")
+	}))
+	sign(folder, (cf * CFrame.new(0, h + 12, 6)).Position, "THE DESCENT GATE — FINISH")
 	return folder
 end
 
-local function buildLoop(
-	parent: Instance,
-	name: string,
-	cx: number,
-	yBase: number,
-	radius: number,
-	zStart: number,
-	zEnd: number,
-	segments: number,
-	width: number
-)
-	local folder = Instance.new("Folder")
-	folder.Name = name
-	folder.Parent = parent
-
-	local function point(theta: number): Vector3
-		-- Ease the sideways shift in and out so you enter and leave the loop straight
-		local s = theta / (2 * math.pi)
-		local z = zStart + (zEnd - zStart) * (3 * s * s - 2 * s * s * s)
-		return W(cx + radius * math.sin(theta), yBase + radius - radius * math.cos(theta), z)
-	end
-
-	for i = 0, segments - 1 do
-		local t0 = 2 * math.pi * i / segments
-		local t1 = 2 * math.pi * (i + 1) / segments
-		local tm = (t0 + t1) / 2
-		local inward = Vector3.new(-math.sin(tm), math.cos(tm), 0)
-		local p = plank(folder, point(t0), point(t1), inward, width, 1.6, {
-			Name = "LoopSegment",
-			Color = if i % 2 == 0 then COLOR.loop else COLOR.track,
-			Material = Enum.Material.Slate,
-		})
-		-- Guide parts lock your direction to the segment so the loop's sideways
-		-- offset carries you to the exit lane.
-		p:SetAttribute("MomentumGuide", true)
+-- Chevron arrows painted on the road pointing the way
+local function chevrons(parent: Instance, road, s: number, count: number, spacing: number, color: Color3?)
+	for i = 0, count - 1 do
+		local cf = road:Frame(s + i * spacing, 0, 0.12)
+		for _, side in { -1, 1 } do
+			newPart(parent, deco({
+				Name = "Chevron",
+				Size = Vector3.new(1, 0.2, 7.5),
+				CFrame = cf * CFrame.new(side * 2.25, 0, -1) * CFrame.Angles(0, side * math.rad(-50), 0),
+				Material = Enum.Material.Neon,
+				Color = color or COLOR.gold,
+			}))
+		end
 	end
 end
 
--- Decorative volcanic monoliths rising out of the lava sea for depth & scale.
-local function buildScenery(parent: Instance)
+-- Quarter pipe + wall along the left edge of a straight piece of road (wall running)
+local function wallRunPipe(parent: Instance, road, s0: number, s1: number)
+	local a, h, right = road:At(s0)
+	local b = road:At(s1)
+	local len = (b - a).Magnitude
+	local mid = (a + b) / 2
+	local r = 20
+	local edge = -right * (ROAD / 2)
+	local function at(deg: number): Vector3
+		local rad = math.rad(deg)
+		return mid + edge - right * r * math.sin(rad) + Y * (r - r * math.cos(rad))
+	end
+	local n = 12
+	for i = 0, n - 1 do
+		local p0, p1 = at(90 * i / n), at(90 * (i + 1) / n)
+		local inward = (mid + edge + Y * r - (p0 + p1) / 2).Unit
+		plank(parent, p0, p1, inward, len, 3, { Name = "WallRunCurve", Color = COLOR.pipe })
+	end
+	plank(parent, at(90), at(90) + Y * 60, right, len, 3, { Name = "WallRunWall", Color = COLOR.pipe })
+	newPart(parent, deco({
+		Name = "WallRunStripe",
+		Size = Vector3.new(1, 1, len),
+		CFrame = CFrame.lookAt(at(90) + Y * 20 + right * 1.6, at(90) + Y * 20 + right * 1.6 + h),
+		Material = Enum.Material.Neon,
+		Color = COLOR.gold,
+	}))
+end
+
+-- Decorative volcanic spires rising out of the lava sea, kept clear of the routes.
+local function buildScenery(parent: Instance, minC: Vector3, maxC: Vector3, routes, floorY: number)
 	local folder = Instance.new("Folder")
 	folder.Name = "Scenery"
 	folder.Parent = parent
-
-	local pillars = {
-		{ 60, -52, 18, 220 },
-		{ 140, 56, 22, 240 },
-		{ 390, -60, 24, 250 },
-		{ 520, 62, 20, 210 },
-		{ 720, -64, 26, 230 },
-		{ 940, 76, 24, 240 },
-		{ 1140, -52, 22, 220 },
-		{ 1290, 74, 26, 230 },
-		{ 1540, -56, 24, 240 },
-		{ 1650, 76, 22, 250 },
-		{ 1870, -62, 26, 220 },
-		{ 2040, 74, 24, 230 },
-		{ 2260, 78, 28, 240 },
-		{ 2520, -68, 24, 230 },
-		{ 2740, 86, 26, 250 },
-		{ 2940, -48, 22, 260 },
-		{ 2960, 92, 22, 260 },
-	}
-	for i, spec in pillars do
-		local x, z, size, h = spec[1], spec[2], spec[3], spec[4]
-		local yBase = -110
-		newPart(folder, {
-			Name = "Spire" .. i,
-			Size = Vector3.new(size, h, size),
-			Position = W(x, yBase + h / 2, z),
-			Color = COLOR.pillar,
-			CanCollide = false,
-			CanQuery = false,
-			CanTouch = false,
-		})
-		-- Glowing lava band near the base of every spire
-		newPart(folder, {
-			Name = "LavaRing" .. i,
-			Size = Vector3.new(size + 1, 2.5, size + 1),
-			Position = W(x, yBase + 18 + (i % 3) * 14, z),
-			Material = Enum.Material.Neon,
-			Color = COLOR.trim,
-			CanCollide = false,
-			CanQuery = false,
-			CanTouch = false,
-		})
+	local rng = Random.new(666)
+	local placed = 0
+	for _ = 1, 400 do
+		if placed >= 46 then
+			break
+		end
+		local x = rng:NextNumber(minC.X, maxC.X)
+		local z = rng:NextNumber(minC.Z, maxC.Z)
+		local size = rng:NextNumber(16, 30)
+		local clear = true
+		for _, p in routes do
+			if (Vector3.new(p.X, 0, p.Z) - Vector3.new(x, 0, z)).Magnitude < size + 45 then
+				clear = false
+				break
+			end
+		end
+		if clear then
+			placed += 1
+			local h = rng:NextNumber(160, 300)
+			newPart(folder, deco({
+				Name = "Spire",
+				Size = Vector3.new(size, h, size),
+				CFrame = CFrame.new(x, floorY + h / 2, z) * CFrame.Angles(0, rng:NextNumber(0, math.pi), 0),
+				Color = COLOR.pillar,
+			}))
+			newPart(folder, deco({
+				Name = "LavaRing",
+				Size = Vector3.new(size + 1, 2.5, size + 1),
+				CFrame = CFrame.new(x, floorY + rng:NextNumber(12, 50), z),
+				Material = Enum.Material.Neon,
+				Color = COLOR.trim,
+			}))
+		end
 	end
 end
 
@@ -3748,12 +4059,12 @@ local function setupLighting()
 	Lighting.OutdoorAmbient = Color3.fromRGB(140, 60, 45)
 	Lighting.EnvironmentDiffuseScale = 0.3
 	local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere") or Instance.new("Atmosphere")
-	atmosphere.Density = 0.34
+	atmosphere.Density = 0.3
 	atmosphere.Offset = 0.12
 	atmosphere.Color = Color3.fromRGB(255, 120, 70)
 	atmosphere.Decay = Color3.fromRGB(110, 25, 15)
 	atmosphere.Glare = 0.3
-	atmosphere.Haze = 2.0
+	atmosphere.Haze = 1.8
 	atmosphere.Parent = Lighting
 	if not Lighting:FindFirstChild("HellBloom") then
 		local bloom = Instance.new("BloomEffect")
@@ -3765,439 +4076,454 @@ local function setupLighting()
 	end
 end
 
-function LevelBuilder.Build(): Folder
+-- =============================================================================
+-- The course
+-- =============================================================================
+
+function LevelBuilder.Build(): Instance
 	local existing = Workspace:FindFirstChild(LEVEL_NAME)
 	if existing then
-		Workspace:SetAttribute("MomentumKillY", ORIGIN.Y - 90)
+		if Workspace:GetAttribute("MomentumKillY") == nil then
+			Workspace:SetAttribute("MomentumKillY", ORIGIN.Y - 200)
+		end
 		return existing
 	end
 
-	local level = Instance.new("Folder")
+	-- A persistent model, so with streaming on every client still gets the whole
+	-- course (checkpoints, stage zones and the road you respawn onto) up front
+	local level = Instance.new("Model")
 	level.Name = LEVEL_NAME
-
+	level.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+	local roadFolder = Instance.new("Folder")
+	roadFolder.Name = "Road"
+	roadFolder.Parent = level
+	local branchFolder = Instance.new("Folder")
+	branchFolder.Name = "Branches"
+	branchFolder.Parent = level
+	local props = Instance.new("Folder")
+	props.Name = "Props"
+	props.Parent = level
 	local zones = Instance.new("Folder")
 	zones.Name = "TutorialZones"
 	zones.Parent = level
-
 	local checkpoints = Instance.new("Folder")
 	checkpoints.Name = "Checkpoints"
 	checkpoints.Parent = level
-
 	local spawns = Instance.new("Folder")
 	spawns.Name = "EnemySpawns"
 	spawns.Parent = level
 
-	-- Molten lava sea beneath the entire 3000+ stud course (two <=2048-stud tiles)
-	for _, cx in { 520, 2568 } do
-		newPart(level, {
-			Name = "LavaSea",
-			Size = Vector3.new(2048, 1, 1400),
-			Position = W(cx, -108, 10),
-			Material = Enum.Material.Neon,
-			Color = COLOR.lava,
-			CanCollide = false,
-			CanQuery = false,
-			CanTouch = false,
+	local road = Road.new(ORIGIN + Vector3.new(-40, 80, 0), 0)
+	local R = road
+	local branches = {} -- { name, keys, color }
+	local stage = {}
+
+	-- ---------------------------------------------------------------- STAGE 1
+	stage[1] = R:Mark("s1")
+	R:Straight(200)
+	local hurdle1 = R.s - 50
+	R:Gap(26)
+	local landing1 = R:Mark("landing1")
+	R:Straight(120)
+	local hurdle2 = landing1 + 55
+	R:Curve(-60, 190, 0, { curb = -1 })
+	R:Straight(70)
+	local cp1 = R.s - 20
+
+	-- ---------------------------------------------------------------- STAGE 2
+	stage[2] = R:Mark("s2")
+	R:Straight(30)
+	local dropStart = R.s
+	R:Straight(330, -95, { color = COLOR.slope }) -- long drop, about 24 degrees at its steepest
+	local valley = R:Mark("valley")
+	R:Straight(150)
+	local hills = R.s
+	R:Straight(130, 28, { color = COLOR.slope })
+	R:Straight(130, -28, { color = COLOR.slope })
+	R:Straight(120, 34, { color = COLOR.slope })
+	R:Straight(130, -34, { color = COLOR.slope })
+	local hillsEnd = R:Mark("hillsEnd")
+	R:Straight(60)
+	-- HIGH RIDGE: climbs off to the left above the valley and the hills, then drops back in
+	do
+		local yv = R:Point(valley).Y - ORIGIN.Y
+		table.insert(branches, {
+			name = "HighRidge",
+			keys = {
+				{ s = valley + 10, lat = 0 },
+				{ s = valley + 120, lat = -46, y = yv + 8 },
+				{ s = hills + 120, lat = -62, y = yv + 52 },
+				{ s = hills + 380, lat = -62, y = yv + 52 },
+				{ s = hillsEnd + 50, lat = 0 },
+			},
+		})
+	end
+	R:Curve(95, 210, -20, { bank = 14, curb = 1 })
+	R:Curve(-80, 210, -10, { bank = 14, curb = -1 })
+	R:Straight(70)
+	local cp2 = R.s - 20
+
+	-- ---------------------------------------------------------------- STAGE 3
+	stage[3] = R:Mark("s3")
+	R:Straight(120)
+	R:Straight(80, 0, { taper = { ROAD, 20 }, curb = 0 })
+	local loop1 = R:Mark("loop1")
+	R:Loop(26, 26, 20)
+	R:Straight(60, 0, { taper = { 20, ROAD } })
+	R:Straight(10)
+	local helix = R:Mark("helix")
+	-- The helix: a guided spiral down, banked into the turn
+	R:Curve(-360, 90, -70, { bank = 16, guide = true, curb = -1 })
+	R:Straight(40, 0, { guide = true, curb = 0 }) -- straightens you out of the spiral
+	R:Straight(50)
+	local cp3 = R.s - 20
+
+	-- ---------------------------------------------------------------- STAGE 4
+	stage[4] = R:Mark("s4")
+	R:Straight(90)
+	local rampAt = R.s
+	R:Ramp(40, 22, { color = COLOR.slope })
+	R:Gap(105, -14)
+	local island = R:Mark("island")
+	R:Straight(90)
+	R:Gap(70, 0, 14)
+	local arrival = R:Mark("arrival")
+	R:Straight(140)
+	local cp4 = R.s - 20
+	-- LOW BRIDGE: the long way round the chasm, no jumps needed
+	do
+		local y0 = R:Point(rampAt - 60).Y - ORIGIN.Y
+		table.insert(branches, {
+			name = "LowBridge",
+			keys = {
+				{ s = rampAt - 60, lat = 0 },
+				{ s = rampAt + 30, lat = 52, y = y0 - 18 },
+				{ s = island + 45, lat = 70, y = y0 - 30 },
+				{ s = arrival + 10, lat = 56, y = y0 - 18 },
+				{ s = arrival + 100, lat = 0 },
+			},
 		})
 	end
 
-	-- =========================================================================
-	-- STAGE 1: RUN & JUMP (X = -45..340, Y = 80, Z = 0)
-	-- =========================================================================
-	deck(level, "Stage1Runway", -45, 198, 80, 0, 36, 8)
-	local spawnPos = W(-25, 80.5, 0)
+	-- ---------------------------------------------------------------- STAGE 5
+	stage[5] = R:Mark("s5")
+	R:Straight(70)
+	local gapStart = R.s
+	R:Gap(175, 22)
+	local terrace = R:Mark("terrace")
+	R:Straight(150)
+	local cp5 = R.s - 20
+	-- CLIMB: a winding ramp beside the homing gap
+	do
+		local y0 = R:Point(gapStart).Y - ORIGIN.Y
+		table.insert(branches, {
+			name = "Climb",
+			keys = {
+				{ s = gapStart - 50, lat = 0 },
+				{ s = gapStart + 30, lat = -55, y = y0 + 2 },
+				{ s = gapStart + 100, lat = -80, y = y0 + 12 },
+				{ s = terrace - 10, lat = -50, y = y0 + 22 },
+				{ s = terrace + 70, lat = 0 },
+			},
+		})
+	end
+
+	-- ---------------------------------------------------------------- STAGE 6
+	stage[6] = R:Mark("s6")
+	R:Straight(20)
+	local stompSlope = R.s
+	R:Straight(330, -125, { color = COLOR.slope }) -- 30 degrees at its steepest
+	R:Straight(40)
+	R:Curve(-75, 170, -35, { bank = 14, curb = -1 })
+	R:Curve(110, 170, -40, { bank = 16, curb = 1 })
+	R:Curve(-60, 200, -25, { bank = 12, curb = -1 })
+	R:Straight(90)
+	local cp6 = R.s - 20
+
+	-- ---------------------------------------------------------------- STAGE 7
+	stage[7] = R:Mark("s7")
+	R:Straight(80)
+	local gauntlet = R.s
+	R:Straight(380)
+	local gauntletEnd = R.s
+	R:Straight(60)
+	local fork = R:Mark("fork")
+	R:Straight(300)
+	local forkEnd = R.s
+	R:Straight(80)
+	local cp7 = R.s - 20
+	skipRoad(R, fork + 30, forkEnd - 30)
+	do
+		local y0 = R:Point(fork).Y - ORIGIN.Y
+		-- Left fork: a speed dip; right fork: flat with imps
+		table.insert(branches, {
+			name = "ForkLeft",
+			width = ROAD - 6,
+			keys = {
+				{ s = fork, lat = 0 },
+				{ s = fork + 100, lat = -48, y = y0 - 4 },
+				{ s = fork + 150, lat = -52, y = y0 - 22 },
+				{ s = fork + 200, lat = -48, y = y0 - 4 },
+				{ s = forkEnd, lat = 0, y = y0 },
+			},
+		})
+		table.insert(branches, {
+			name = "ForkRight",
+			width = ROAD - 6,
+			keys = {
+				{ s = fork, lat = 0 },
+				{ s = fork + 100, lat = 48, y = y0 },
+				{ s = fork + 200, lat = 48, y = y0 },
+				{ s = forkEnd, lat = 0, y = y0 },
+			},
+		})
+	end
+
+	-- ---------------------------------------------------------------- STAGE 8
+	stage[8] = R:Mark("s8")
+	R:Straight(130, -16, { color = COLOR.slope })
+	R:Straight(80)
+	R:Straight(80, 0, { taper = { ROAD, 20 }, curb = 0 })
+	local bigLoop = R:Mark("bigLoop")
+	R:Loop(32, 26, 20)
+	R:Straight(60, 0, { taper = { 20, ROAD } })
+	R:Straight(30)
+	R:Curve(45, 240, 0, { bank = 10, curb = 1 })
+	R:Straight(60)
+	R:Straight(80, 0, { taper = { ROAD, 16 }, curb = 0 })
+	local cork = R:Mark("cork")
+	R:Corkscrew(300, 15, 16)
+	-- A short guided run-out, so you leave the twist pointing straight down the road
+	R:Straight(40, 0, { guide = true, curb = 0, width = 16 })
+	R:Straight(60, 0, { taper = { 16, ROAD }, curb = 0 })
+	R:Straight(50)
+	local skyRamp = R.s
+	R:Ramp(44, 24, { color = COLOR.slope })
+	R:Gap(80, -16)
+	local plaza = R:Mark("plaza")
+	R:Straight(200)
+	local finish = R.s
+
+	-- ======================================================== BUILD THE ROADS
+	buildRibbon(roadFolder, R.samples, ROAD, { Name = "Road" })
+	for _, br in branches do
+		local folder = Instance.new("Folder")
+		folder.Name = br.name
+		folder.Parent = branchFolder
+		local pts = branchPoints(R, br.keys)
+		buildRibbon(folder, pts, br.width or BRANCH, { Name = br.name, Color = COLOR.branch }, COLOR.branchTrim)
+		br.points = pts
+	end
+
+	-- ============================================================ STAGE PROPS
+	-- Stage 1: start gate, hurdles
+	local spawnCf = R:Frame(20, 0, 0.5)
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "MomentumSpawn"
 	spawn.Size = Vector3.new(8, 1, 8)
-	spawn.CFrame = CFrame.lookAt(spawnPos, spawnPos + Vector3.xAxis)
+	spawn.CFrame = spawnCf
 	spawn.Anchored = true
 	spawn.Neutral = true
 	spawn.Duration = 0
 	spawn.Material = Enum.Material.Neon
 	spawn.Color = COLOR.trim
 	spawn.Parent = level
-
-	-- Decorative start gate arch
-	for _, side in { -1, 1 } do
-		newPart(level, {
-			Name = "StartPillar",
-			Size = Vector3.new(5, 28, 5),
-			Position = W(5, 94, side * 19),
+	do
+		local cf = R:Frame(45)
+		for _, side in { -1, 1 } do
+			newPart(props, deco({
+				Name = "StartPillar",
+				Size = Vector3.new(5, 28, 5),
+				CFrame = cf * CFrame.new(side * (ROAD / 2 + 2), 14, 0),
+				Color = COLOR.pillar,
+			}))
+		end
+		newPart(props, deco({
+			Name = "StartBeam",
+			Size = Vector3.new(ROAD + 9, 4, 5),
+			CFrame = cf * CFrame.new(0, 29, 0),
 			Color = COLOR.pillar,
-			CanCollide = false,
-			CanQuery = false,
+		}))
+		sign(props, (cf * CFrame.new(0, 37, 0)).Position, "CIRCLE 0: THE DESCENT GATE")
+	end
+	chevrons(props, R, 60, 3, 28)
+	for _, spec in { { hurdle1, 4.5, "TAP SPACE TO HOP" }, { hurdle2, 8.5, "HOLD SPACE TO JUMP HIGHER" } } do
+		local cf = R:Frame(spec[1])
+		newPart(props, {
+			Name = "Hurdle",
+			Size = Vector3.new(ROAD, spec[2], 6),
+			CFrame = cf * CFrame.new(0, spec[2] / 2, 0),
+			Color = COLOR.hurdle,
 		})
-	end
-	newPart(level, {
-		Name = "StartBeam",
-		Size = Vector3.new(5, 4, 43),
-		Position = W(5, 109, 0),
-		Color = COLOR.pillar,
-		CanCollide = false,
-		CanQuery = false,
-	})
-	sign(level, W(5, 117, 0), "CIRCLE 0: THE DESCENT GATE")
-	chevrons(level, 25, 80, 0, 3, 28)
-
-	-- Low step hurdle (tap Space)
-	newPart(level, {
-		Name = "LowHurdle",
-		Size = Vector3.new(6, 4.5, 36),
-		Position = W(149, 82.25, 0),
-		Color = COLOR.hurdle,
-	})
-	strip(level, W(146, 84.5, -17), W(146, 84.5, 17), 1.0, COLOR.gold)
-	sign(level, W(149, 91, 0), "TAP SPACE TO HOP")
-
-	-- Gap 1 (26 studs: X = 198..224) + Stage 1 landing deck
-	deck(level, "Stage1Landing", 224, 340, 80, 0, 36, 8)
-
-	-- Higher hurdle (hold Space for full jump height)
-	newPart(level, {
-		Name = "HighHurdle",
-		Size = Vector3.new(6, 8.5, 36),
-		Position = W(275, 84.25, 0),
-		Color = COLOR.hurdle,
-	})
-	strip(level, W(272, 88.5, -17), W(272, 88.5, 17), 1.0, COLOR.gold)
-	sign(level, W(275, 95, 0), "HOLD SPACE TO JUMP HIGHER")
-
-	buildCheckpoint(checkpoints, 1, "ROLL & MOMENTUM", 324, 80, 0, 36)
-	tutorialZone(
-		zones,
-		1,
-		"STAGE 1 · RUN & JUMP",
-		"Hold W to build speed. Tap Space for a short hop, hold Space to jump higher.",
-		-60,
-		324,
-		50,
-		150,
-		-30,
-		30
-	)
-
-	-- =========================================================================
-	-- STAGE 2: ROLL & DOWNHILL MOMENTUM (X = 340..782, Y = 80 -> 0, Z = 0)
-	-- =========================================================================
-	local dropEndX: number
-	do
-		local slopeDeg = 24
-		local slopeRad = math.rad(slopeDeg)
-		local crestR = 22
-		local botR = 36
-		local pts = {}
-		crestArc(pts, 340, 80 - crestR, crestR, 0, slopeDeg, 6)
-		local crestEnd = pts[#pts]
-		local botStartY = botR - botR * math.cos(slopeRad)
-		local dxStraight = (crestEnd.Y - botStartY) / math.tan(slopeRad)
-		local botCx = crestEnd.X + dxStraight + botR * math.sin(slopeRad)
-		arc(pts, botCx, botR, botR, -slopeDeg, 0, 10)
-		dropEndX = pts[#pts].X
-		profile(level, pts, 0, 36, 4, { Name = "TutorialDrop", Color = COLOR.slope })
-		sign(level, W(375, 84, 0), "HOLD Q DOWNHILL TO ROLL (2x SPEED)")
+		sign(props, (cf * CFrame.new(0, spec[2] + 7, 0)).Position, spec[3])
 	end
 
-	-- Valley runway with two patrolling imps to bowl right through
-	deck(level, "Stage2Valley", dropEndX, 620, 0, 0, 36, 6)
-	enemySpawn(spawns, W(570, 4, -5), Vector3.new(0, 0, 7), 1.2)
-	enemySpawn(spawns, W(596, 4, 5), Vector3.new(0, 0, -7), 1.2)
-	sign(level, W(582, 13, 0), "ROLL THROUGH IMPS TO SMASH THEM")
-
-	-- Smooth momentum hill (16 deg up, rounded crest at Y = 20, 20 deg down)
-	local hillEndX: number
+	-- Stage 2
+	sign(props, R:Point(dropStart + 30, 0, 9), "HOLD Q DOWNHILL TO ROLL (2x SPEED)")
+	enemySpawn(spawns, R:Point(valley + 90, -6, 4), Vector3.new(0, 0, 7), 1.2)
+	enemySpawn(spawns, R:Point(valley + 120, 6, 4), Vector3.new(0, 0, -7), 1.2)
+	sign(props, R:Point(valley + 60, 10, 13), "ROLL THROUGH IMPS TO SMASH THEM")
+	sign(props, R:Point(valley + 30, -30, 14), "HIGH RIDGE ← (SKIP THE HILLS)")
 	do
-		local upDeg, downDeg = 16, 20
-		local upRad, downRad = math.rad(upDeg), math.rad(downDeg)
-		local botR, crestR, peakY = 28, 24, 20
-		local pts = {}
-		arc(pts, 620, botR, botR, 0, upDeg, 6)
-		local upEnd = pts[#pts]
-		local crestCy = peakY - crestR
-		local crestStartY = crestCy + crestR * math.cos(upRad)
-		local dxUp = (crestStartY - upEnd.Y) / math.tan(upRad)
-		local crestCx = upEnd.X + dxUp + crestR * math.sin(upRad)
-		crestArc(pts, crestCx, crestCy, crestR, -upDeg, downDeg, 8)
-		local crestEnd = pts[#pts]
-		local botDownStartY = botR - botR * math.cos(downRad)
-		local dxDown = (crestEnd.Y - botDownStartY) / math.tan(downRad)
-		local botDownCx = crestEnd.X + dxDown + botR * math.sin(downRad)
-		arc(pts, botDownCx, botR, botR, -downDeg, 0, 6)
-		hillEndX = pts[#pts].X
-		profile(level, pts, 0, 36, 4, { Name = "MomentumHill", Color = COLOR.slope })
-		newPart(level, {
-			Name = "HillCore",
-			Size = Vector3.new(44, peakY - 3, 35),
-			Position = W(crestCx, (peakY - 3) / 2, 0),
-			Color = COLOR.rock,
+		local yv = R:Point(valley).Y
+		local p = R:Point(hills + 250, -62)
+		enemySpawn(spawns, Vector3.new(p.X, yv + 52 + 12, p.Z))
+	end
+
+	-- Stage 3
+	chevrons(props, R, stage[3] + 30, 3, 20)
+	sign(props, R:Point(stage[3] + 50, 0, 13), "STOPPED? HOLD Q TO SPIN-DASH (TAP SPACE TO REV)")
+	sign(props, R:Point(loop1, 9, 60), "THE LOOP: 90+ SPEED OR SPIN-DASH")
+	sign(props, R:Point(helix, 0, 16), "THE SPIRAL: HOLD FORWARD, IT STEERS FOR YOU")
+
+	-- Stage 4
+	sign(props, R:Point(rampAt - 20, 0, 22), "JUMP + TAP SPACE MID-AIR TO AIR DASH")
+	sign(props, R:Point(rampAt - 70, 40, 14), "LOW BRIDGE → (THE LONG WAY)")
+	sign(props, R:Point(island + 60, 6, 16), "STEER RIGHT IN MID-AIR + AIR DASH")
+
+	-- Stage 5: homing chain over the gap
+	do
+		local y0 = R:Point(gapStart).Y
+		for i, frac in { 0.22, 0.42, 0.62, 0.8 } do
+			local p = R:Point(gapStart + 175 * frac)
+			enemySpawn(spawns, Vector3.new(p.X, y0 + 8 + i * 5, p.Z))
+		end
+		sign(props, R:Point(gapStart - 30, 0, 22), "LOCK ON -> TAP SPACE TO HOMING ATTACK")
+		sign(props, R:Point(gapStart - 40, -45, 14), "← CLIMB (NO HOMING NEEDED)")
+	end
+
+	-- Stage 6: stomp imp hovering over the steep part of the slope
+	do
+		local mid = stompSlope + 165
+		local p = R:Point(mid)
+		enemySpawn(spawns, p + Y * 30)
+		sign(props, R:Point(stompSlope - 10, 0, 26), "JUMP OUT, THEN PRESS Q MID-AIR TO STOMP!")
+		newPart(props, deco({
+			Name = "StompTarget",
+			Size = Vector3.new(ROAD - 6, 0.3, 3),
+			CFrame = R:Frame(mid, 0, 0.3),
+			Material = Enum.Material.Neon,
+			Color = COLOR.gold,
+		}))
+	end
+
+	-- Stage 7: boost gauntlet, wall-run pipe, fork around a lava pillar
+	chevrons(props, R, gauntlet - 60, 5, 28)
+	sign(props, R:Point(gauntlet - 20, 0, 15), "HOLD SHIFT TO BOOST THROUGH IMPS (NEEDS HEAT)")
+	for i, lat in { 0, 8, -8, 0 } do
+		local _, _, right = R:At(gauntlet + 70 + i * 60)
+		enemySpawn(spawns, R:Point(gauntlet + 70 + i * 60, lat, 4), right * (if i % 2 == 0 then 8 else -8), 1.1)
+	end
+	wallRunPipe(level, R, gauntlet, gauntletEnd)
+	sign(props, R:Point(gauntlet + 40, -26, 22), "OR STEER LEFT TO WALL RUN!")
+	enemySpawn(spawns, R:Point(gauntlet + 140, -ROAD / 2 - 16, 26))
+	enemySpawn(spawns, R:Point(gauntlet + 260, -ROAD / 2 - 16, 26))
+	do
+		local base = R:Point((fork + forkEnd) / 2)
+		newPart(props, {
+			Name = "ForkPillar",
+			Size = Vector3.new(34, 260, 34),
+			Position = base - Y * 120,
+			Color = COLOR.pillar,
 		})
+		newPart(props, deco({
+			Name = "ForkPillarGlow",
+			Size = Vector3.new(35, 3, 35),
+			Position = base - Y * 30,
+			Material = Enum.Material.Neon,
+			Color = COLOR.trim,
+		}))
+		sign(props, R:Point(fork - 10, 0, 18), "← SPEED DIP   |   IMP ROW →")
+		enemySpawn(spawns, R:Point(fork + 130, 48, 4))
+		enemySpawn(spawns, R:Point(fork + 170, 48, 4))
 	end
 
-	-- Stage 3 floor begins right at hillEndX so there is zero seam
-	deck(level, "Stage3Arena", hillEndX, 1070, 0, 8, 52, 6)
-	buildCheckpoint(checkpoints, 2, "SPIN-DASH & LOOP", 782, 0, 0, 36)
-	tutorialZone(
-		zones,
-		2,
-		"STAGE 2 · ROLL & MOMENTUM",
-		"Hold Q while moving downhill to curl into a ball. Rolling doubles downhill speed and smashes imps!",
-		324,
-		782,
-		-20,
-		130,
-		-30,
-		30
-	)
-
-	-- =========================================================================
-	-- STAGE 3: SPIN-DASH & FIRST LOOP (X = 782..1070, Y = 0, Z = 0 -> 16)
-	-- =========================================================================
-	chevrons(level, 810, 0, 0, 3, 20, COLOR.gold)
-	strip(level, W(868, 0, 0), W(933, 0, 0), 2.0, COLOR.trim)
-	sign(level, W(835, 13, 0), "STOPPED? HOLD Q TO SPIN-DASH (TAP SPACE TO REV)")
-
-	buildLoop(level, "TutorialLoop", 935, 0, 24, 0, 16, 48, 14)
-	sign(level, W(935, 56, 8), "THE LOOP: 90+ SPEED OR SPIN-DASH")
-
-	chevrons(level, 985, 0, 16, 2, 22, COLOR.gold)
-	buildCheckpoint(checkpoints, 3, "AIR DASH", 1045, 0, 16, 36)
-	tutorialZone(
-		zones,
-		3,
-		"STAGE 3 · SPIN-DASH & LOOP",
-		"Hold Q while slow to charge a Spin-Dash (tap Space to rev), then release to blast through the loop!",
-		782,
-		1045,
-		-20,
-		90,
-		-26,
-		42
-	)
-
-	-- =========================================================================
-	-- STAGE 4: AIR DASH & AIR CONTROL (X = 1070..1465, Y = 0, Z = 16 -> 8)
-	-- =========================================================================
+	-- Stage 8
+	chevrons(props, R, bigLoop - 90, 3, 20)
+	sign(props, R:Point(bigLoop, 10, 72), "BOOST THROUGH THE GIANT LOOP!")
+	sign(props, R:Point(cork - 20, 0, 18), "CORKSCREW! KEEP YOUR SPEED UP")
+	sign(props, R:Point(skyRamp - 30, 0, 18), "SKY JUMP! JUMP AT THE TOP OF THE RAMP")
 	do
-		local pts = {}
-		arc(pts, 1070, 32, 32, 0, 22, 6)
-		local last = pts[#pts]
-		table.insert(pts, last + Vector2.new(math.cos(math.rad(22)), math.sin(math.rad(22))) * 24)
-		profile(level, pts, 16, 30, 3, { Name = "AirDashRamp", Color = COLOR.slope })
-		sign(level, W(1095, 22, 16), "JUMP + TAP SPACE MID-AIR TO AIR DASH")
-	end
-
-	-- 90-stud chasm -> Mid Island (X = 1194..1274, Z = 16)
-	deck(level, "AirDashIsland", 1194, 1274, 0, 16, 34, 6)
-	chevrons(level, 1216, 0, 16, 2, 24, COLOR.gold)
-
-	-- 62-stud offset gap shifting from Z = 16 -> Z = 8 to practice air steering
-	deck(level, "Stage4Arrival", 1336, 1465, 0, 8, 36, 6)
-	sign(level, W(1305, 16, 12), "STEER LEFT IN MID-AIR + AIR DASH")
-	strip(level, W(1456, 0, -9), W(1456, 0, 25), 1.8, COLOR.gold)
-
-	buildCheckpoint(checkpoints, 4, "HOMING CHAIN", 1395, 0, 8, 36)
-	tutorialZone(
-		zones,
-		4,
-		"STAGE 4 · AIR DASH & STEERING",
-		"Jump off the ramp and tap Space again in mid-air to Air Dash! Hold A/D in flight to steer.",
-		1045,
-		1395,
-		-40,
-		90,
-		-20,
-		44
-	)
-
-	-- =========================================================================
-	-- STAGE 5: HOMING ATTACK CHAIN (X = 1395..1780, Y = 0 -> 20, Z = 8)
-	-- =========================================================================
-	enemySpawn(spawns, W(1495, 9, 8))
-	enemySpawn(spawns, W(1533, 15, 8))
-	enemySpawn(spawns, W(1571, 21, 8))
-	enemySpawn(spawns, W(1609, 25, 8))
-	sign(level, W(1495, 22, 8), "LOCK ON -> TAP SPACE TO HOMING ATTACK")
-
-	deck(level, "HomingTerrace", 1638, 1780, 20, 8, 38, 6)
-	chevrons(level, 1660, 20, 8, 2, 24, COLOR.gold)
-
-	buildCheckpoint(checkpoints, 5, "STOMP DIVE", 1715, 20, 8, 38)
-	tutorialZone(
-		zones,
-		5,
-		"STAGE 5 · HOMING ATTACK",
-		"Jump toward the Cinder Imps. When the red reticle locks on, tap Space to home in and chain across!",
-		1395,
-		1715,
-		-30,
-		90,
-		-20,
-		36
-	)
-
-	-- =========================================================================
-	-- STAGE 6: STOMP DIVE & SLOPE LAUNCH (X = 1715..1975, Y = 20 -> -40, Z = 8)
-	-- =========================================================================
-	enemySpawn(spawns, W(1810, 6, 8))
-	sign(level, W(1795, 30, 8), "JUMP OUT, THEN PRESS Q MID-AIR TO STOMP!")
-
-	local stompEndX: number
-	do
-		local slopeDeg = 30
-		local slopeRad = math.rad(slopeDeg)
-		local botR = 32
-		local botCy = -40 + botR
-		local botStartY = botCy - botR * math.cos(slopeRad)
-		local startX, startY = 1780, -2
-		local dx = (startY - botStartY) / math.tan(slopeRad)
-		local botCx = startX + dx + botR * math.sin(slopeRad)
-		local pts = { Vector2.new(startX, startY) }
-		arc(pts, botCx, botCy, botR, -slopeDeg, 0, 10)
-		stompEndX = pts[#pts].X
-		profile(level, pts, 8, 38, 4, { Name = "StompRamp", Color = COLOR.slope })
-		-- Glowing target bar on the slope directly underneath the stomp imp
-		local targetY = startY - (1810 - startX) * math.tan(slopeRad)
-		strip(level, W(1810, targetY + 0.4, -7), W(1810, targetY + 0.4, 23), 2.5, COLOR.gold)
-	end
-
-	-- Valley floor out of the stomp ramp
-	deck(level, "Stage6Exit", stompEndX, 1975, -40, 8, 48, 6)
-	buildCheckpoint(checkpoints, 6, "BOOST & WALL RUN", 1945, -40, 8, 48)
-	tutorialZone(
-		zones,
-		6,
-		"STAGE 6 · STOMP",
-		"Jump off the ledge and press Q in mid-air to STOMP straight down onto the ramp for an instant speed launch!",
-		1715,
-		1945,
-		-60,
-		70,
-		-24,
-		40
-	)
-
-	-- =========================================================================
-	-- STAGE 7: HEAT, BOOST & WALL-RUN CANYON (X = 1975..2475, Y = -40, Z = 8)
-	-- =========================================================================
-	deck(level, "BoostCanyonFloor", 1975, 2475, -40, 8, 48, 6)
-	chevrons(level, 2005, -40, 8, 5, 28, COLOR.gold)
-	sign(level, W(2080, -25, 8), "HOLD SHIFT TO BOOST THROUGH IMPS (NEEDS HEAT)")
-
-	-- Center boost gauntlet: plow straight through while boosting!
-	enemySpawn(spawns, W(2175, -36, 8), Vector3.new(0, 0, 8), 1.1)
-	enemySpawn(spawns, W(2235, -36, 8), Vector3.new(0, 0, -8), 1.1)
-	enemySpawn(spawns, W(2295, -36, 8), Vector3.new(0, 0, 8), 1.1)
-
-	-- Curved wall-run pipe seamlessly joined to the left edge (Z = -16) of the canyon floor
-	do
-		local x0, x1 = 2065, 2405
-		local xm, len = (x0 + x1) / 2, x1 - x0
-		local cz, cy, r = -16, -40 + 20, 20
-		local function at(a: number): Vector3
-			local rad = math.rad(a)
-			return W(xm, cy - r * math.cos(rad), cz - r * math.sin(rad))
+		local y = R:Point(skyRamp).Y
+		for _, frac in { 0.35, 0.6 } do
+			local p = R:Point(skyRamp + 44 + 80 * frac)
+			enemySpawn(spawns, Vector3.new(p.X, y + 30, p.Z))
 		end
-		local n = 12
-		for i = 0, n - 1 do
-			local a0, a1 = 90 * i / n, 90 * (i + 1) / n
-			local p0, p1 = at(a0), at(a1)
-			local inward = (W(xm, cy, cz) - (p0 + p1) / 2).Unit
-			plank(level, p0, p1, inward, len, 3, { Name = "WallRunCurve", Color = COLOR.pipe })
-		end
-		plank(level, at(90), W(xm, 40, cz - r), Vector3.zAxis, len, 3, { Name = "WallRunWall", Color = COLOR.pipe })
-		strip(level, W(x0, -40, -13), W(x1, -40, -13), 1.0, COLOR.gold)
-		sign(level, W(2120, -18, -22), "OR STEER LEFT TO WALL RUN!")
-		enemySpawn(spawns, W(2195, -14, -29), Vector3.new(16, 0, 0), 0.7)
-		enemySpawn(spawns, W(2305, -10, -29), Vector3.new(16, 0, 0), 0.7)
 	end
-
-	buildCheckpoint(checkpoints, 7, "THE FINALE", 2445, -40, 8, 48)
-	tutorialZone(
-		zones,
-		7,
-		"STAGE 7 · HEAT, BOOST & WALL RUN",
-		"Run fast to fill HEAT past the white tick, then hold Shift to BOOST through imps — or steer left to Wall Run!",
-		1945,
-		2445,
-		-60,
-		60,
-		-50,
-		42
-	)
-
-	-- =========================================================================
-	-- STAGE 8: THE FINALE — DIP, GIANT LOOP, SKY JUMP & DESCENT GATE
-	-- (X = 2475..3025, Y = -40 -> -52 -> -40, Z = 8 -> 24)
-	-- =========================================================================
-	local dipEndX: number
+	buildGoalGate(level, R, plaza + 70, 36)
 	do
-		local slopeDeg = 14
-		local slopeRad = math.rad(slopeDeg)
-		local crestR, botR = 24, 28
-		local pts = {}
-		crestArc(pts, 2475, -40 - crestR, crestR, 0, slopeDeg, 5)
-		local crestEnd = pts[#pts]
-		local botCy = -52 + botR
-		local botStartY = botCy - botR * math.cos(slopeRad)
-		local dx = (crestEnd.Y - botStartY) / math.tan(slopeRad)
-		local botCx = crestEnd.X + dx + botR * math.sin(slopeRad)
-		arc(pts, botCx, botCy, botR, -slopeDeg, 0, 6)
-		dipEndX = pts[#pts].X
-		profile(level, pts, 8, 48, 4, { Name = "FinaleDip", Color = COLOR.slope })
-	end
-
-	-- Giant Loop Arena Floor
-	deck(level, "FinaleLoopFloor", dipEndX, 2735, -52, 16, 56, 6)
-	chevrons(level, dipEndX + 10, -52, 8, 3, 20, COLOR.gold)
-	strip(level, W(dipEndX + 20, -52, 8), W(2643, -52, 8), 2.2, COLOR.trim)
-	buildLoop(level, "FinaleLoop", 2645, -52, 28, 8, 24, 52, 14)
-	sign(level, W(2645, 16, 16), "BOOST THROUGH THE GIANT LOOP!")
-
-	-- Finale Sky-Jump Ramp on exit lane (Z = 24)
-	do
-		local pts = {}
-		arc(pts, 2735, -52 + 32, 32, 0, 25, 6)
-		local last = pts[#pts]
-		table.insert(pts, last + Vector2.new(math.cos(math.rad(25)), math.sin(math.rad(25))) * 22)
-		profile(level, pts, 24, 32, 3, { Name = "FinaleLaunchRamp", Color = COLOR.slope })
-	end
-
-	-- Bonus celebratory aerial imps over the final lava gorge
-	enemySpawn(spawns, W(2798, -28, 24))
-	enemySpawn(spawns, W(2828, -26, 24))
-
-	-- Victory Plaza & The Descent Gate
-	deck(level, "VictoryPlaza", 2843, 3015, -40, 24, 60, 8)
-	chevrons(level, 2858, -40, 24, 2, 22, COLOR.gold)
-	buildGoalGate(level, 2910, -40, 24, 36)
-
-	-- Backstop quarter pipe behind the gate so boosting through doesn't dump you into lava
-	do
-		local pts = {}
-		arc(pts, 2995, -40 + 24, 24, 0, 90, 12)
-		table.insert(pts, Vector2.new(3019, 90))
-		profile(level, pts, 24, 60, 3, { Name = "VictoryQuarterPipe", Color = COLOR.pipe })
-		newPart(level, {
+		local cf = R:Frame(finish - 2)
+		newPart(props, {
 			Name = "VictoryBackWall",
-			Size = Vector3.new(24, 130, 60),
-			Position = W(3033, 25, 24),
+			Size = Vector3.new(ROAD + 20, 130, 24),
+			CFrame = cf * CFrame.new(0, 40, -14),
 			Color = COLOR.rock,
 		})
 	end
 
-	tutorialZone(
-		zones,
-		8,
-		"FINALE · FULL THROTTLE",
-		"Hit Shift to BOOST through the Giant Loop, soar off the ramp, and smash through the Descent Gate!",
-		2445,
-		3060,
-		-70,
-		110,
-		-26,
-		66
-	)
+	-- ====================================================== CHECKPOINTS, ZONES
+	local cps = {
+		{ cp1, "ROLL & MOMENTUM" },
+		{ cp2, "SPIN-DASH & LOOP" },
+		{ cp3, "AIR DASH" },
+		{ cp4, "HOMING CHAIN" },
+		{ cp5, "STOMP & DESCENT" },
+		{ cp6, "BOOST & WALL RUN" },
+		{ cp7, "THE FINALE" },
+	}
+	for i, cp in cps do
+		buildCheckpoint(checkpoints, R, i, cp[2], cp[1])
+	end
 
-	buildScenery(level)
+	local texts = {
+		{ "STAGE 1 · RUN & JUMP", "Hold W to build speed. Tap Space for a short hop, hold Space to jump higher." },
+		{ "STAGE 2 · ROLL & MOMENTUM", "Hold Q while moving downhill to curl into a ball and roll through imps. Or take the HIGH RIDGE on the left!" },
+		{ "STAGE 3 · SPIN-DASH & LOOP", "Hold Q while slow to charge a Spin-Dash (tap Space to rev), blast through the loop, then ride the spiral down." },
+		{ "STAGE 4 · AIR DASH", "Jump off the ramp and tap Space mid-air to Air Dash. Hold A/D to steer. Or take the LOW BRIDGE on the right." },
+		{ "STAGE 5 · HOMING ATTACK", "Jump toward the imps. When the reticle locks on, tap Space to home in and chain across. Or CLIMB on the left." },
+		{ "STAGE 6 · STOMP & DESCENT", "Jump off the ledge and press Q mid-air to STOMP onto the slope, then lean through the canyon curves." },
+		{ "STAGE 7 · BOOST & WALL RUN", "Fill HEAT past the tick, hold Shift to BOOST through imps, or steer left to wall run. Pick a side at the fork!" },
+		{ "FINALE · FULL THROTTLE", "Boost through the giant loop, hold on through the corkscrew, and fly into the Descent Gate!" },
+	}
+	local stageEnds = { cp1, cp2, cp3, cp4, cp5, cp6, cp7, finish + 30 }
+	local prevEnd = -60
+	for i, t in texts do
+		tutorialZones(zones, R, i, t[1], t[2], prevEnd, stageEnds[i])
+		prevEnd = stageEnds[i]
+	end
+
+	-- ============================================================= SCENERY
+	local minC, maxC = Vector3.one * math.huge, -Vector3.one * math.huge
+	local routePts = {}
+	for _, smp in R.samples do
+		minC = minC:Min(smp.pos)
+		maxC = maxC:Max(smp.pos)
+		table.insert(routePts, smp.pos)
+	end
+	for _, br in branches do
+		for _, p in br.points do
+			minC = minC:Min(p.pos)
+			maxC = maxC:Max(p.pos)
+			table.insert(routePts, p.pos)
+		end
+	end
+	local floorY = minC.Y - 70
+	local pad = 260
+	local tile = 2000
+	for x = minC.X - pad, maxC.X + pad, tile do
+		for z = minC.Z - pad, maxC.Z + pad, tile do
+			local sx = math.min(tile, maxC.X + pad - x)
+			local sz = math.min(tile, maxC.Z + pad - z)
+			newPart(level, deco({
+				Name = "LavaSea",
+				Size = Vector3.new(sx, 1, sz),
+				Position = Vector3.new(x + sx / 2, floorY, z + sz / 2),
+				Material = Enum.Material.Neon,
+				Color = COLOR.lava,
+			}))
+		end
+	end
+	buildScenery(level, minC - Vector3.new(pad, 0, pad), maxC + Vector3.new(pad, 0, pad), routePts, floorY)
 	setupLighting()
 
 	-- Turn off any other spawns (like the Baseplate template's) so you start here.
@@ -4207,8 +4533,9 @@ function LevelBuilder.Build(): Folder
 		end
 	end
 
+	level:SetAttribute("CourseLength", math.floor(finish))
 	level.Parent = Workspace
-	Workspace:SetAttribute("MomentumKillY", ORIGIN.Y - 90)
+	Workspace:SetAttribute("MomentumKillY", floorY + 20)
 	return level
 end
 

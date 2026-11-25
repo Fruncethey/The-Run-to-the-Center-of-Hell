@@ -175,8 +175,17 @@ end
 -- build: whether the piece leading up to this sample is solid road
 function Road:Add(pos: Vector3, up: Vector3, build: boolean, guide: boolean, opts)
 	local last = self.samples[#self.samples]
-	if last then
-		self.s += (pos - last.pos).Magnitude
+	local step = if last then (pos - last.pos).Magnitude else 0
+	self.s += step
+	-- Curbs carry on 50 studs past the end of a curve, so you can't slide off its exit
+	local curb = opts and opts.curb
+	if curb then
+		self.curbSide, self.curbLeft = curb, 50
+	elseif self.curbSide and self.curbLeft > 0 and build and not guide then
+		curb = self.curbSide
+		self.curbLeft -= step
+	else
+		self.curbSide = nil
 	end
 	table.insert(self.samples, {
 		pos = pos,
@@ -185,8 +194,9 @@ function Road:Add(pos: Vector3, up: Vector3, build: boolean, guide: boolean, opt
 		build = build,
 		guide = guide,
 		color = opts and opts.color,
-		curb = opts and opts.curb,
+		curb = curb,
 		name = opts and opts.name,
+		width = opts and opts.width,
 	})
 	self.pos = pos
 end
@@ -207,7 +217,13 @@ function Road:Straight(len: number, dy: number?, opts)
 	for i = 1, n do
 		local t = i / n
 		local p = start + h * len * t + Y * dy * ease(t)
-		self:Add(p, Y, true, false, opts)
+		local o = opts
+		if opts and opts.taper then
+			-- Narrow or widen the road (funnels into loops and the corkscrew)
+			o = table.clone(opts)
+			o.width = opts.taper[1] + (opts.taper[2] - opts.taper[1]) * t
+		end
+		self:Add(p, Y, true, opts ~= nil and opts.guide == true, o)
 	end
 end
 
@@ -260,7 +276,9 @@ function Road:Ramp(len: number, angleDeg: number, opts)
 end
 
 -- Vertical loop with a sideways shift so you exit beside the entry (positive = right).
-function Road:Loop(radius: number, shift: number, opts)
+-- The loop is narrower than the road and the shift is wider than the loop, so the
+-- way out never overlaps the way in.
+function Road:Loop(radius: number, shift: number, width: number)
 	local h = self:Heading()
 	local right = self:Right()
 	local start = self.pos
@@ -271,12 +289,12 @@ function Road:Loop(radius: number, shift: number, opts)
 		local side = right * shift * (3 * s * s - 2 * s * s * s)
 		local p = start + h * radius * math.sin(th) + Y * radius * (1 - math.cos(th)) + side
 		local up = Y * math.cos(th) - h * math.sin(th)
-		self:Add(p, up, true, true, opts or { color = if i % 2 == 0 then COLOR.loop else COLOR.track })
+		self:Add(p, up, true, true, { color = if i % 2 == 0 then COLOR.loop else COLOR.track, width = width })
 	end
 end
 
 -- Corkscrew: the road twists a full turn around the direction of travel.
-function Road:Corkscrew(len: number, radius: number, opts)
+function Road:Corkscrew(len: number, radius: number, width: number)
 	local h = self:Heading()
 	local start = self.pos
 	local axis = start + Y * radius
@@ -286,7 +304,7 @@ function Road:Corkscrew(len: number, radius: number, opts)
 		local phi = 2 * math.pi * t
 		local up = rotateAround(Y, h, phi)
 		local p = axis + h * len * t - up * radius
-		self:Add(p, up, true, true, opts or { color = if i % 2 == 0 then COLOR.loop else COLOR.track })
+		self:Add(p, up, true, true, { color = if i % 2 == 0 then COLOR.loop else COLOR.track, width = width })
 	end
 end
 
@@ -326,6 +344,15 @@ end
 
 -- Turn a list of points (with ups) into road planks with glowing edge trim.
 local function buildRibbon(parent: Instance, pts, width: number, props, trimColor: Color3?)
+	-- Curb corner points, worked out once per sample so neighbouring curb pieces meet exactly
+	local function edge(k: number, side: number): Vector3
+		local c = pts[k]
+		local prev, nxt = pts[math.max(1, k - 1)], pts[math.min(#pts, k + 1)]
+		local f = nxt.pos - prev.pos
+		local right = f:Cross(c.up)
+		right = if right.Magnitude > 1e-3 then right.Unit else Vector3.zAxis
+		return c.pos + right * side * ((c.width or width) / 2 + 1) + c.up * 4.5
+	end
 	for i = 2, #pts do
 		local a, b = pts[i - 1], pts[i]
 		if b.build ~= false then
@@ -341,9 +368,10 @@ local function buildRibbon(parent: Instance, pts, width: number, props, trimColo
 					end
 				end
 			end
-			local extra = width * math.sin(math.min(bend, 0.6)) * 0.6
+			local w = b.width or width
+			local extra = w * math.sin(math.min(bend, 0.6)) * 0.6
 			local up = (a.up + b.up).Unit
-			local p = plank(parent, a.pos, b.pos, up, width, 3, {
+			local p = plank(parent, a.pos, b.pos, up, w, 3, {
 				Name = b.name or props.Name,
 				Color = b.color or props.Color or (if i % 2 == 0 then COLOR.track else COLOR.track2),
 				Material = props.Material or Enum.Material.Basalt,
@@ -363,11 +391,19 @@ local function buildRibbon(parent: Instance, pts, width: number, props, trimColo
 						Color = trimColor or COLOR.trim,
 					}))
 					-- Curbs keep you on the outside of fast curves
-					if b.curb == side then
+					-- and funnel you into loops. Each runs edge to edge, so a narrowing road
+					-- gets a smoothly angled wall instead of a staircase.
+					if b.curb == side or b.curb == 0 then
+						local ea, eb = edge(i - 1, side), edge(i, side)
+						-- Overlap only forward: a piece poking back past the joint would stick out
+						-- in front of the previous one, and you'd start a step already touching it
+						local dir = (eb - ea).Unit
 						newPart(parent, {
 							Name = "Curb",
-							Size = Vector3.new(1.4, 4, size.Z),
-							CFrame = cf * CFrame.new(side * (size.X / 2 + 0.7), size.Y / 2 + 2, 0),
+							Size = Vector3.new(2, 9, (eb - ea).Magnitude + 0.75),
+							-- Kept upright (not tilted with the bank), so every piece's inner face
+							-- lines up exactly with the next one's
+							CFrame = CFrame.lookAt((ea + eb) / 2 + dir * 0.375, eb + dir, Y),
 							Color = COLOR.pillar,
 						})
 					end
@@ -665,7 +701,7 @@ end
 -- The course
 -- =============================================================================
 
-function LevelBuilder.Build(): Folder
+function LevelBuilder.Build(): Instance
 	local existing = Workspace:FindFirstChild(LEVEL_NAME)
 	if existing then
 		if Workspace:GetAttribute("MomentumKillY") == nil then
@@ -674,8 +710,11 @@ function LevelBuilder.Build(): Folder
 		return existing
 	end
 
-	local level = Instance.new("Folder")
+	-- A persistent model, so with streaming on every client still gets the whole
+	-- course (checkpoints, stage zones and the road you respawn onto) up front
+	local level = Instance.new("Model")
 	level.Name = LEVEL_NAME
+	level.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
 	local roadFolder = Instance.new("Folder")
 	roadFolder.Name = "Road"
 	roadFolder.Parent = level
@@ -747,14 +786,17 @@ function LevelBuilder.Build(): Folder
 
 	-- ---------------------------------------------------------------- STAGE 3
 	stage[3] = R:Mark("s3")
-	R:Straight(180)
+	R:Straight(120)
+	R:Straight(80, 0, { taper = { ROAD, 20 }, curb = 0 })
 	local loop1 = R:Mark("loop1")
-	R:Loop(26, 18)
-	R:Straight(70)
+	R:Loop(26, 26, 20)
+	R:Straight(60, 0, { taper = { 20, ROAD } })
+	R:Straight(10)
 	local helix = R:Mark("helix")
 	-- The helix: a guided spiral down, banked into the turn
 	R:Curve(-360, 90, -70, { bank = 16, guide = true, curb = -1 })
-	R:Straight(90)
+	R:Straight(40, 0, { guide = true, curb = 0 }) -- straightens you out of the spiral
+	R:Straight(50)
 	local cp3 = R.s - 20
 
 	-- ---------------------------------------------------------------- STAGE 4
@@ -861,18 +903,24 @@ function LevelBuilder.Build(): Folder
 	-- ---------------------------------------------------------------- STAGE 8
 	stage[8] = R:Mark("s8")
 	R:Straight(130, -16, { color = COLOR.slope })
-	R:Straight(140)
+	R:Straight(80)
+	R:Straight(80, 0, { taper = { ROAD, 20 }, curb = 0 })
 	local bigLoop = R:Mark("bigLoop")
-	R:Loop(32, 20)
-	R:Straight(90)
+	R:Loop(32, 26, 20)
+	R:Straight(60, 0, { taper = { 20, ROAD } })
+	R:Straight(30)
 	R:Curve(45, 240, 0, { bank = 10, curb = 1 })
 	R:Straight(60)
+	R:Straight(80, 0, { taper = { ROAD, 16 }, curb = 0 })
 	local cork = R:Mark("cork")
-	R:Corkscrew(260, 15)
-	R:Straight(110)
+	R:Corkscrew(300, 15, 16)
+	-- A short guided run-out, so you leave the twist pointing straight down the road
+	R:Straight(40, 0, { guide = true, curb = 0, width = 16 })
+	R:Straight(60, 0, { taper = { 16, ROAD }, curb = 0 })
+	R:Straight(50)
 	local skyRamp = R.s
 	R:Ramp(44, 24, { color = COLOR.slope })
-	R:Gap(115, 4)
+	R:Gap(80, -16)
 	local plaza = R:Mark("plaza")
 	R:Straight(200)
 	local finish = R.s
@@ -1015,11 +1063,11 @@ function LevelBuilder.Build(): Folder
 	chevrons(props, R, bigLoop - 90, 3, 20)
 	sign(props, R:Point(bigLoop, 10, 72), "BOOST THROUGH THE GIANT LOOP!")
 	sign(props, R:Point(cork - 20, 0, 18), "CORKSCREW! KEEP YOUR SPEED UP")
-	sign(props, R:Point(skyRamp - 30, 0, 18), "SKY JUMP!")
+	sign(props, R:Point(skyRamp - 30, 0, 18), "SKY JUMP! JUMP AT THE TOP OF THE RAMP")
 	do
 		local y = R:Point(skyRamp).Y
 		for _, frac in { 0.35, 0.6 } do
-			local p = R:Point(skyRamp + 44 + 115 * frac)
+			local p = R:Point(skyRamp + 44 + 80 * frac)
 			enemySpawn(spawns, Vector3.new(p.X, y + 30, p.Z))
 		end
 	end

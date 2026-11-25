@@ -58,16 +58,18 @@ The heat meter fills while you go faster than 50 studs/s. Boost needs the bar pa
 
 ## Tutorial course ("Circle 0: The Descent Gate")
 
-The tutorial spans 8 progressive stages with 7 checkpoints, contextual HUD stage prompts, a run timer, and a finish gate:
+The tutorial is one long, twisting speed course (about 8,000 studs) over a lava sea. It runs through 8 stages with 7 checkpoints, contextual HUD stage prompts, a run timer and a finish gate. Along the way you get banked curves, rolling hills, long drops, two loops, a helix, a corkscrew and four optional branch routes that split off and merge back:
 
-1. **Stage 1 · Run & Jump:** build speed on the runway, tap `Space` over the low hurdle and gap, hold `Space` over the tall hurdle.
-2. **Stage 2 · Roll & Momentum:** hold `Q` down the big drop for 2x downhill acceleration, bowl through two patrolling Cinder Imps, and carry momentum over the hill.
-3. **Stage 3 · Spin-Dash & Loop:** hold `Q` while slow (tap `Space` to rev) and release to launch through the vertical loop.
-4. **Stage 4 · Air Dash & Steering:** jump off the ramp and tap `Space` in mid-air to Air Dash across the lava chasm, then bend your flight path with `A`/`D` onto the offset landing.
-5. **Stage 5 · Homing Attack:** jump toward the 4-imp chain and tap `Space` whenever the red reticle locks on to bounce up to the high terrace.
-6. **Stage 6 · Stomp:** jump off the ledge and press `Q` in mid-air to Stomp through the imp onto the 30° ramp for an instant downhill speed launch.
-7. **Stage 7 · Heat, Boost & Wall Run:** build Heat on the straightaway, then hold `Shift` to Boost straight through the imp gauntlet — or steer left onto the curved wall-run pipe.
-8. **Finale · Full Throttle:** ride the dip and Boost through the Giant Loop, launch off the sky ramp, and smash through **The Descent Gate** to finish (press `R` after finishing to run it again).
+1. **Stage 1 · Run & Jump:** build speed on the runway, tap `Space` over the hurdles and the gap, then take the sweeping right-hander.
+2. **Stage 2 · Roll & Momentum:** hold `Q` down the long drop, roll over four hills, or take the **High Ridge** branch above them. Banked S-curves follow.
+3. **Stage 3 · Spin-Dash & Loop:** spin-dash into a narrow loop, then ride a guided helix spiralling down.
+4. **Stage 4 · Air Dash:** jump off the ramp and Air Dash over the chasm to the island and the offset landing, or take the long **Low Bridge** around it.
+5. **Stage 5 · Homing Chain:** home through the 4-imp chain up to the terrace, or run the winding **Climb** ramp.
+6. **Stage 6 · Stomp & Descent:** stomp onto the 30° slope, then carry the speed through a twisting banked canyon.
+7. **Stage 7 · Boost & Wall Run:** Boost through the gauntlet or ride the wall-run pipe, then pick a side at the **Fork** around a lava pillar.
+8. **Finale:** Boost through the giant loop, keep your speed through the corkscrew, jump off the sky ramp and smash through **The Descent Gate** (press `R` after finishing to run it again).
+
+Edge curbs line the curves and funnel you into the loops and the corkscrew. Missing a jump respawns you at your last checkpoint as soon as you've fallen 100 studs.
 
 ## How it works (short version)
 
