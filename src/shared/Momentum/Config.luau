@@ -10,7 +10,9 @@ local Config = {
 	Friction = 35, -- ground slowdown with no input
 	TopSpeed = 90, -- the fastest you can get by running on flat ground
 	MaxSpeed = 320, -- hard cap (slopes, spin-dash and boost can exceed TopSpeed)
-	SlopeFactor = 0.55, -- share of gravity that pushes you along slopes
+	SlopeFactor = 0.55, -- share of gravity that slows you going uphill
+	SlopeFactorDown = 1.1, -- share of gravity that speeds you up going downhill
+	DescentMinPull = 6, -- on a slope steeper than about 3 degrees, running keeps the speed it gains
 	TurnRateSlow = 9, -- radians/sec when standing still
 	TurnRateFast = 1.4, -- radians/sec at top speed and above
 
@@ -39,6 +41,7 @@ local Config = {
 	BodyRadius = 1.2,
 	BodyOffset = 0.5,
 	Skin = 0.05,
+	FallRespawnDepth = 100, -- falling this far below where you last stood respawns you
 	MaxStepDistance = 2, -- physics substeps so fast movement never tunnels
 	VisualUpRate = 12,
 
@@ -50,9 +53,9 @@ local Config = {
 	RollFriction = 4, -- running sheds speed above TopSpeed much faster (RunOverspeedDrag)
 	RollTurnFactor = 0.35, -- share of running's turn rate you keep while rolling
 	RollBrake = 30, -- holding back while rolling (running brakes at Decel)
-	RollSlopeDown = 2.0, -- rolling downhill gains twice the speed running does
+	RollSlopeDown = 1.6, -- rolling downhill gains 1.6x the speed running does
 	RollSlopeUp = 0.5, -- and loses half as much going uphill
-	RunOverspeedDrag = 25, -- running above TopSpeed (not boosting) bleeds back down to it
+	RunOverspeedDrag = 12, -- on flat ground, running above TopSpeed (not boosting) bleeds back down to it
 	SpinDashMaxStartSpeed = 20,
 	SpinChargeTime = 0.9, -- seconds of holding for a full charge
 	SpinRevBonus = 0.25, -- each jump tap while charging adds this much charge
@@ -112,6 +115,22 @@ local Config = {
 	RunCycleOverdriveStride = 0.12, -- leg stride grows by up to 12%
 	RunCycleOverdriveLean = 0.4, -- extra forward tilt of the torso by RunCycleOverdriveSpeed, radians
 	RunCycleRunLean = 0.45, -- forward tilt of the torso at full running speed, radians
+	RunCycleSpeedLean = 0.3, -- extra forward tilt that builds from walking to running top speed, radians
+	RunCycleArmRateMax = 1.6, -- at running top speed the arms swing this many times faster than the legs
+	-- Top-speed pose: above normal running speed (boosts, slopes) the arms sweep behind the back
+	RunCycleTopStart = 100, -- starts blending in here (running tops out at 90)
+	RunCycleTopFull = 150, -- fully in by this speed
+	RunCycleTopLean = 0.5, -- extra forward tilt of the torso, radians
+	RunCycleTopArmBack = 1.3, -- how far back the arms sweep, radians from hanging straight down (pi/2 = level with the road)
+	RunCycleTopArmOut = 0.2, -- arms angle slightly out from the body, radians
+	-- At any lean, an arm swinging back past ArmSoftBack (radians from straight down) is eased
+	-- toward ArmMaxBack, so the arms trail out behind him instead of sticking up
+	RunCycleArmSoftBack = 1.0,
+	RunCycleArmMaxBack = 1.4,
+	-- Stylized idle (R6): keyframes are the IDLE table at the top of RunCycle.luau
+	RunCycleIdleSpeed = 4, -- the idle fades out as you speed up past this, studs/s
+	RunCycleIdleRate = 1, -- playback speed of the idle loop (2 = twice as fast)
+	RunCycleIdleScale = 1, -- how big the idle moves are (0.5 = subtler, 1.3 = bigger)
 	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
 	RunCycleBankMax = 0.48, -- radians, the most it ever banks
 	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders

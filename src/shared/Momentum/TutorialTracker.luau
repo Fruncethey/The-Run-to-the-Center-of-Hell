@@ -119,6 +119,41 @@ function TutorialTracker:BindLevel()
 	end
 end
 
+-- Bind again if more zones or checkpoints have streamed in, keeping progress
+function TutorialTracker:Rescan()
+	local level = self.level
+	local zones = level:FindFirstChild("TutorialZones")
+	local cps = level:FindFirstChild("Checkpoints")
+	local goal = level:FindFirstChild("GoalGate")
+	local nCps = 0
+	if cps then
+		for _, child in cps:GetChildren() do
+			if child:FindFirstChild("Trigger") then
+				nCps += 1
+			end
+		end
+	end
+	local nZones = if zones then #zones:GetChildren() else 0
+	local hasGoal = goal ~= nil and goal:FindFirstChild("Trigger") ~= nil
+	if nZones == #self.zones and nCps == #self.checkpoints and hasGoal == (self.goal ~= nil) then
+		return
+	end
+	local reached = {}
+	for _, cp in self.checkpoints do
+		if cp.reached then
+			reached[cp.index] = true
+		end
+	end
+	self.level = nil
+	self:BindLevel()
+	for _, cp in self.checkpoints do
+		if reached[cp.index] then
+			cp.reached = true
+			setGlowColor(cp.glows, COLOR_ACTIVE)
+		end
+	end
+end
+
 function TutorialTracker:HasCourse(): boolean
 	return #self.zones > 0 or self.totalCheckpoints > 0 or self.goal ~= nil
 end
@@ -130,6 +165,12 @@ function TutorialTracker:Update(dt: number)
 	end
 	if not self.level then
 		return
+	end
+	-- With streaming on, parts of the course can arrive after we first bound to it
+	self.rescanTimer = (self.rescanTimer or 0) - dt
+	if self.rescanTimer <= 0 then
+		self.rescanTimer = 1
+		self:Rescan()
 	end
 
 	local ctrl = self.ctrl

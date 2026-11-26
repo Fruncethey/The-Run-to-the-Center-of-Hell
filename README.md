@@ -58,16 +58,33 @@ The heat meter fills while you go faster than 50 studs/s. Boost needs the bar pa
 
 ## Tutorial course ("Circle 0: The Descent Gate")
 
-The tutorial spans 8 progressive stages with 7 checkpoints, contextual HUD stage prompts, a run timer, and a finish gate:
+The tutorial is one huge, twisting speed course (about 12,900 studs, on a 60-stud-wide road) that runs through a canyon of giant walls high above a lava sea. It runs through 8 stages with 7 checkpoints, contextual HUD stage prompts, a run timer and a finish gate. Along the way you get banked curves, rolling hills, long drops, two loops, a helix, a corkscrew and four optional branch routes that split off and merge back:
 
-1. **Stage 1 · Run & Jump:** build speed on the runway, tap `Space` over the low hurdle and gap, hold `Space` over the tall hurdle.
-2. **Stage 2 · Roll & Momentum:** hold `Q` down the big drop for 2x downhill acceleration, bowl through two patrolling Cinder Imps, and carry momentum over the hill.
-3. **Stage 3 · Spin-Dash & Loop:** hold `Q` while slow (tap `Space` to rev) and release to launch through the vertical loop.
-4. **Stage 4 · Air Dash & Steering:** jump off the ramp and tap `Space` in mid-air to Air Dash across the lava chasm, then bend your flight path with `A`/`D` onto the offset landing.
-5. **Stage 5 · Homing Attack:** jump toward the 4-imp chain and tap `Space` whenever the red reticle locks on to bounce up to the high terrace.
-6. **Stage 6 · Stomp:** jump off the ledge and press `Q` in mid-air to Stomp through the imp onto the 30° ramp for an instant downhill speed launch.
-7. **Stage 7 · Heat, Boost & Wall Run:** build Heat on the straightaway, then hold `Shift` to Boost straight through the imp gauntlet — or steer left onto the curved wall-run pipe.
-8. **Finale · Full Throttle:** ride the dip and Boost through the Giant Loop, launch off the sky ramp, and smash through **The Descent Gate** to finish (press `R` after finishing to run it again).
+1. **Stage 1 · Run & Jump:** build speed on the runway, tap `Space` over the hurdles and the gap, then take the sweeping right-hander.
+2. **Stage 2 · Roll & Momentum:** hold `Q` down the long drop, roll over four hills, or take the **High Ridge** branch above them. Banked S-curves follow.
+3. **Stage 3 · Spin-Dash & Loop:** spin-dash into a narrow loop, then ride a guided helix spiralling down.
+4. **Stage 4 · Air Dash:** jump off the ramp and Air Dash over the chasm to the island and the offset landing, or take the long **Low Bridge** around it.
+5. **Stage 5 · Homing Chain:** home through the 4-imp chain up to the terrace, or run the winding **Climb** ramp.
+6. **Stage 6 · Stomp & Descent:** stomp onto the 30° slope, then carry the speed through a twisting banked canyon.
+7. **Stage 7 · Boost & Wall Run:** Boost through the gauntlet or ride the wall-run pipe, then pick a side at the **Fork** around a lava pillar.
+8. **Finale:** Boost through the giant loop, keep your speed through the corkscrew, jump off the sky ramp and smash through **The Descent Gate** (press `R` after finishing to run it again).
+
+The scale is set by `K` (1.6) at the top of `LevelBuilder.luau`: it stretches road lengths, slopes and curves, while jump gaps and launch ramps keep their size so every jump needs the same speed and timing. Edge curbs line the curves and funnel you into the loops and the corkscrew. Missing a jump respawns you at your last checkpoint as soon as you've fallen 100 studs.
+
+
+### Art style
+
+The level goes for a stylized, PS2-era look to match the soundtrack: flat painted colors and bold shapes rather
+than realistic materials. All of it lives in `LevelBuilder.luau` (the `COLOR` table and `setupLighting`):
+
+- Roads are flat brick-red stripes, orange slopes, crimson loops and purple branch routes, edged with glowing
+  orange lava trim. Nothing uses blue or cyan, so cyan Ash always stands out.
+- Canyon walls and lava spires are chunky stacked slabs of plum and red rock that step back from the road.
+- The sky is a purple cloud ceiling over a thick orange haze, so it fades from purple overhead to orange at the
+  horizon, and distant shapes melt into the haze.
+- Bloom on the neon lava and lights, plus a saturation and contrast boost.
+- Big set pieces stay well clear of every route: floating rock islands with glowing undersides, giant chains
+  hanging out of the sky into the lava, and obsidian towers with glowing bands around the horizon.
 
 ## How it works (short version)
 
@@ -75,8 +92,9 @@ The tutorial spans 8 progressive stages with 7 checkpoints, contextual HUD stage
   simulates the character and writes the root CFrame and velocity. The client owns its character, so it replicates.
 - Character parts are in a collision group that doesn't collide with the world; the controller does its own
   collision with a sphere cast (walls, ramps) and a ray cast down along the current surface normal (ground snapping).
-- When grounded, "up" is the surface normal. Gravity is projected along the surface (`SlopeFactor`), which gives
-  momentum on slopes and lets you lose speed going up loops and walls. Below `MinWallSpeed` on a steep surface you peel off.
+- When grounded, "up" is the surface normal. Gravity is projected along the surface, which gives momentum on slopes
+  and lets you lose speed going up loops and walls. Downhill pulls harder (`SlopeFactorDown` 1.1) than uphill holds
+  you back (`SlopeFactor` 0.55), so slopes always pay out speed while loops need the same run-up as before. Below `MinWallSpeed` on a steep surface you peel off.
 - Moving onto a new surface keeps your speed and redirects it along the surface, which is what makes loops and
   quarter pipes flow.
 - Parts with the attribute `MomentumGuide = true` lock your direction to the part's LookVector. The loop uses this so
@@ -91,10 +109,10 @@ Hold the roll button (Q) while moving faster than 20 to curl into a roll. It tra
 | | Running | Rolling |
 |---|---|---|
 | Holding forward | Speeds you up to `TopSpeed` (90) | Does nothing: slopes are your engine |
-| Above `TopSpeed` | Sheds speed back to 90 (`RunOverspeedDrag` 25/s) | Keeps it; friction is only 4/s |
-| Downhill | Normal slope gain | Twice the gain (`RollSlopeDown`) |
+| Above `TopSpeed` | Keeps it while going downhill; on flat ground sheds it back to 90 (`RunOverspeedDrag` 12/s) | Keeps it; friction is only 4/s |
+| Downhill | Strong slope gain, about 180 speed at the bottom of the stage 2 drop | 1.6x that (`RollSlopeDown`), over 200 |
 | Uphill | Normal slope loss | Half the loss (`RollSlopeUp`) |
-| Steering | Full turn rate | About a third (`RollTurnFactor`) |
+| Steering | Full turn rate (above top speed it scales up so the turning circle stays the same) | About a third (`RollTurnFactor`) |
 | Braking (hold back) | Strong (160/s) | Weak (30/s) |
 
 You uncurl below 8 speed, or by jumping. Rolling also destroys enemies you hit.
@@ -123,7 +141,7 @@ Anything tagged `HomingTarget` can be locked onto, so later things like soul-cha
 
 | Speed | Look |
 |---|---|
-| Standing | Idle breathing |
+| Standing | Stylized idle loop (R6): breath, snappy glances, overhead stretch, warm-up hops |
 | Up to 20 | Walk: short stride, relaxed arm swing, upright |
 | 20 to 60 | Blends into a run: longer stride, high knee lift, pumping arms, forward lean, bounce |
 | 100 to 150 and up | Sprint: deep lean, full stride, arms snapping forward and back |
@@ -132,6 +150,18 @@ Anything tagged `HomingTarget` can be locked onto, so later things like soul-cha
 While running, the arms work cartoon style: one is thrust forward while the other is flung back, and they hold
 those poses and snap across in time with the stride (`RunCycleArmSnap`). They also float a little away from the
 shoulders, sliding toward where they point (`RunCycleArmDetach`, 0.04 studs).
+
+The arms hang from the torso, so the deep lean at speed would swing them up behind him. Instead, any arm
+swinging back past `RunCycleArmSoftBack` (1.0 radians from straight down) is eased toward `RunCycleArmMaxBack`
+(1.4, just under level), and the top-speed arms-back pose is aimed against the road rather than the torso, so at
+any lean the arms trail out behind him.
+
+The idle is keyframed like the Roblox Animation Editor: the `IDLE` table at the top of `RunCycle.luau` holds
+one track per channel (head turn, arm raise, torso lean, hop height...), each a list of
+`{ time, value, easingStyle, easingDirection }` keys. Between keys it eases with Roblox's own tween curves
+(`TweenService:GetValue`), so Back, Elastic and Bounce give snappy overshoots. Change a key's time, value or
+easing to restyle a beat. `RunCycleIdleRate` speeds the loop up or down, `RunCycleIdleScale` makes every move
+bigger or subtler, and `RunCycleIdleSpeed` sets how fast you can move before the idle fades out.
 
 At speed the whole body banks into turns like a bike, more the faster and tighter the turn
 (`RunCycleBank`, capped at `RunCycleBankMax` = 0.48 radians).

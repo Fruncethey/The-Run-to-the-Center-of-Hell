@@ -39,7 +39,10 @@ end
 -- How fast running can turn: sharp when slow, wide arcs at top speed.
 local function runTurnRate(speed: number): number
 	local t = math.clamp(speed / Config.TopSpeed, 0, 1)
-	return Config.TurnRateSlow + (Config.TurnRateFast - Config.TurnRateSlow) * t
+	local rate = Config.TurnRateSlow + (Config.TurnRateFast - Config.TurnRateSlow) * t
+	-- Past top speed (slopes, boosts) keep the turning circle the same size, so
+	-- you can still take the curves at the bottom of a big drop
+	return rate * math.max(1, speed / Config.TopSpeed)
 end
 
 local function towards(a: Vector3, b: Vector3, t: number): Vector3
@@ -113,6 +116,12 @@ function Controller.new(character: Model, humanoid: Humanoid, root: BasePart)
 	params.IgnoreWater = true
 	self.rayParams = params
 
+	local overlap = OverlapParams.new()
+	overlap.FilterType = Enum.RaycastFilterType.Exclude
+	overlap.FilterDescendantsInstances = { character }
+	overlap.RespectCanCollide = true
+	self.overlapParams = overlap
+
 	return self
 end
 
@@ -137,6 +146,7 @@ function Controller:AddIgnore(instance: Instance)
 	local list = self.rayParams.FilterDescendantsInstances
 	table.insert(list, instance)
 	self.rayParams.FilterDescendantsInstances = list
+	self.overlapParams.FilterDescendantsInstances = list
 end
 
 function Controller:GetSpeed(): number
@@ -243,6 +253,7 @@ function Controller:Step(dt: number, camCF: CFrame)
 	local sdt = dt / steps
 	for _ = 1, steps do
 		self:MoveAndCollide(self.velocity * sdt)
+		self:PushOutOfWalls()
 		if self.grounded then
 			self:ProbeGround(sdt)
 		else
@@ -265,6 +276,9 @@ function Controller:Step(dt: number, camCF: CFrame)
 
 	local killY = Workspace:GetAttribute("MomentumKillY")
 	if typeof(killY) == "number" and self.position.Y < killY then
+		self:Respawn()
+	elseif not self.grounded and self.lastGroundY and self.position.Y < self.lastGroundY - Config.FallRespawnDepth then
+		-- Missed a jump: respawn now instead of landing on some lower part of the course
 		self:Respawn()
 	end
 end
@@ -371,9 +385,12 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 
 	-- Gravity along the slope: this is what makes momentum matter
 	local gTan = projectOnPlane(Vector3.new(0, -Config.Gravity, 0), n)
-	local slope = Config.SlopeFactor
+	-- Going downhill pulls harder than going uphill holds you back, so slopes
+	-- always pay out speed and loops still need the same run-up as before
+	local downhill = gTan:Dot(vel) > 0
+	local slope = if downhill then Config.SlopeFactorDown else Config.SlopeFactor
 	if self.rolling then
-		slope *= if gTan:Dot(vel) > 0 then Config.RollSlopeDown else Config.RollSlopeUp
+		slope *= if downhill then Config.RollSlopeDown else Config.RollSlopeUp
 	end
 	if not self.charging then
 		vel += gTan * slope * dt
@@ -418,8 +435,10 @@ function Controller:GroundMovement(dt: number, wish: Vector3)
 		speed = math.max(0, speed - Config.Friction * dt)
 	end
 
-	-- Running can't hold onto speed past TopSpeed the way a roll can
-	if not self.rolling and not self.charging and not self.boosting and speed > Config.TopSpeed then
+	-- Running can't hold onto speed past TopSpeed the way a roll can, except while
+	-- a real downhill is still feeding it
+	local onDescent = downhill and gTan.Magnitude > Config.DescentMinPull
+	if not self.rolling and not self.charging and not self.boosting and not onDescent and speed > Config.TopSpeed then
 		speed = math.max(Config.TopSpeed, speed - Config.RunOverspeedDrag * dt)
 	end
 
@@ -638,6 +657,41 @@ function Controller:MoveAndCollide(motion: Vector3)
 	end
 end
 
+-- A sweep that starts touching a part doesn't see it, so running along a wall
+-- that slowly angles into your path (the outside of a curve) can let the body
+-- creep into it a little each step and come out the other side. Push the body
+-- sphere back out of any wall-like block it overlaps.
+function Controller:PushOutOfWalls()
+	local up = if self.grounded then self.up else WORLD_UP
+	local center = self.position + up * Config.BodyOffset
+	local radius = Config.BodyRadius
+	for _, part in Workspace:GetPartBoundsInRadius(center, radius, self.overlapParams) do
+		if part:IsA("Part") and part.Shape == Enum.PartType.Block then
+			local half = part.Size / 2
+			local loc = part.CFrame:PointToObjectSpace(center)
+			local closest = Vector3.new(
+				math.clamp(loc.X, -half.X, half.X),
+				math.clamp(loc.Y, -half.Y, half.Y),
+				math.clamp(loc.Z, -half.Z, half.Z)
+			)
+			local away = loc - closest
+			local dist = away.Magnitude
+			if dist > 1e-4 and dist < radius then
+				local nrm = part.CFrame:VectorToWorldSpace(away / dist)
+				-- Walls only: floors and ceilings are handled by the ground probe
+				if math.abs(nrm:Dot(up)) < 0.5 then
+					self.position += nrm * (radius - dist + Config.Skin)
+					center = self.position + up * Config.BodyOffset
+					local into = self.velocity:Dot(nrm)
+					if into < 0 then
+						self.velocity -= nrm * into
+					end
+				end
+			end
+		end
+	end
+end
+
 function Controller:ProbeGround(dt: number)
 	local n = self.up
 	local reach = self.hipHeight + Config.SnapDistance + self.velocity.Magnitude * dt * 0.5
@@ -674,6 +728,7 @@ function Controller:SetGround(n: Vector3, part: Instance?)
 	self.up = n
 	self.groundPart = part
 	self.grounded = true
+	self.lastGroundY = self.position.Y
 end
 
 -- Touch down from the air: the part of our velocity going into the surface is lost.
@@ -712,6 +767,7 @@ function Controller:Respawn()
 	self.visualUp = WORLD_UP
 	self.grounded = false
 	self.groundPart = nil
+	self.lastGroundY = nil
 	self.rolling = false
 	self.charging = false
 	self.boosting = false
