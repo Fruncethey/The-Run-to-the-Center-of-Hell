@@ -127,6 +127,10 @@ local Config = {
 	-- toward ArmMaxBack, so the arms trail out behind him instead of sticking up
 	RunCycleArmSoftBack = 1.0,
 	RunCycleArmMaxBack = 1.4,
+	-- Stylized idle (R6): keyframes are the IDLE table at the top of RunCycle.luau
+	RunCycleIdleSpeed = 4, -- the idle fades out as you speed up past this, studs/s
+	RunCycleIdleRate = 1, -- playback speed of the idle loop (2 = twice as fast)
+	RunCycleIdleScale = 1, -- how big the idle moves are (0.5 = subtler, 1.3 = bigger)
 	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
 	RunCycleBankMax = 0.48, -- radians, the most it ever banks
 	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders

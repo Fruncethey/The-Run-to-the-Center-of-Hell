@@ -141,7 +141,7 @@ Anything tagged `HomingTarget` can be locked onto, so later things like soul-cha
 
 | Speed | Look |
 |---|---|
-| Standing | Idle breathing |
+| Standing | Stylized idle loop (R6): breath, snappy glances, overhead stretch, warm-up hops |
 | Up to 20 | Walk: short stride, relaxed arm swing, upright |
 | 20 to 60 | Blends into a run: longer stride, high knee lift, pumping arms, forward lean, bounce |
 | 100 to 150 and up | Sprint: deep lean, full stride, arms snapping forward and back |
@@ -155,6 +155,13 @@ The arms hang from the torso, so the deep lean at speed would swing them up behi
 swinging back past `RunCycleArmSoftBack` (1.0 radians from straight down) is eased toward `RunCycleArmMaxBack`
 (1.4, just under level), and the top-speed arms-back pose is aimed against the road rather than the torso, so at
 any lean the arms trail out behind him.
+
+The idle is keyframed like the Roblox Animation Editor: the `IDLE` table at the top of `RunCycle.luau` holds
+one track per channel (head turn, arm raise, torso lean, hop height...), each a list of
+`{ time, value, easingStyle, easingDirection }` keys. Between keys it eases with Roblox's own tween curves
+(`TweenService:GetValue`), so Back, Elastic and Bounce give snappy overshoots. Change a key's time, value or
+easing to restyle a beat. `RunCycleIdleRate` speeds the loop up or down, `RunCycleIdleScale` makes every move
+bigger or subtler, and `RunCycleIdleSpeed` sets how fast you can move before the idle fades out.
 
 At speed the whole body banks into turns like a bike, more the faster and tighter the turn
 (`RunCycleBank`, capped at `RunCycleBankMax` = 0.48 radians).

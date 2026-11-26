@@ -1006,6 +1006,10 @@ local Config = {
 	-- toward ArmMaxBack, so the arms trail out behind him instead of sticking up
 	RunCycleArmSoftBack = 1.0,
 	RunCycleArmMaxBack = 1.4,
+	-- Stylized idle (R6): keyframes are the IDLE table at the top of RunCycle.luau
+	RunCycleIdleSpeed = 4, -- the idle fades out as you speed up past this, studs/s
+	RunCycleIdleRate = 1, -- playback speed of the idle loop (2 = twice as fast)
+	RunCycleIdleScale = 1, -- how big the idle moves are (0.5 = subtler, 1.3 = bigger)
 	RunCycleBank = 0.004, -- how far the body leans into turns (times turn rate times speed)
 	RunCycleBankMax = 0.48, -- radians, the most it ever banks
 	RunCycleArmDetach = 0.04, -- studs the running arms float away from the shoulders
@@ -2535,6 +2539,96 @@ local function rot(x: number, y: number, z: number): CFrame
 	return CFrame.fromEulerAnglesXYZ(x, y, z)
 end
 
+local TweenService = game:GetService("TweenService")
+
+-- Stylized idle (R6), keyframed like the Animation Editor. Each channel is a list of keys
+-- { time, value, easingStyle, easingDirection }. The easing (any Enum.EasingStyle name) is
+-- used on the way INTO that key, exactly like a tween; leave it out for Linear. Times are
+-- seconds into the loop; angles are radians, rootY is studs.
+-- The loop: a slow breath, a snappy look left then right, a big overhead arm stretch with
+-- a side lean, then two quick warm-up hops before it starts again.
+local IDLE_LENGTH = 6.6
+local IDLE = {
+	-- Whole body: only the hops lift him (R6 has no knees, so no crouching)
+	rootY = {
+		{ 0, 0 }, { 5.0, 0 },
+		{ 5.18, 0.55, "Quad", "Out" }, { 5.36, 0, "Quad", "In" },
+		{ 5.54, 0.4, "Quad", "Out" }, { 5.72, 0, "Quad", "In" },
+		{ 6.6, 0 },
+	},
+	-- Torso pitch (+ leans back): breathe in and out, then squash forward on each landing
+	torsoPitch = {
+		{ 0, -0.04 }, { 1.4, 0.05, "Sine", "InOut" }, { 2.6, -0.04, "Sine", "InOut" },
+		{ 5.0, -0.04 }, { 5.18, 0.06, "Quad", "Out" }, { 5.36, -0.18, "Quad", "In" },
+		{ 5.54, 0.04, "Back", "Out" }, { 5.72, -0.14, "Quad", "In" },
+		{ 6.3, -0.04, "Elastic", "Out" }, { 6.6, -0.04 },
+	},
+	-- Torso roll: lean away from the stretching arm
+	torsoRoll = {
+		{ 0, 0 }, { 3.9, 0 }, { 4.15, 0.16, "Back", "Out" }, { 4.6, 0.16 }, { 4.95, 0, "Cubic", "InOut" }, { 6.6, 0 },
+	},
+	-- Head yaw (+ looks left): two snappy glances that overshoot and settle
+	headYaw = {
+		{ 0, 0 }, { 1.8, 0 }, { 2.02, 0.65, "Back", "Out" }, { 2.7, 0.65 },
+		{ 2.92, -0.65, "Back", "Out" }, { 3.5, -0.65 }, { 3.8, 0, "Cubic", "Out" }, { 6.6, 0 },
+	},
+	-- Head pitch (+ looks up): lifts with the breath and follows the stretch
+	headPitch = {
+		{ 0, 0 }, { 1.4, 0.1, "Sine", "InOut" }, { 2.6, 0, "Sine", "InOut" },
+		{ 3.9, 0 }, { 4.15, 0.25, "Back", "Out" }, { 4.6, 0.25 }, { 4.95, 0, "Cubic", "InOut" }, { 6.6, 0 },
+	},
+	-- Right arm forward/up (+): shoulders rise with the breath, a big overhead stretch that
+	-- bounces back down, then the arms pump on the hops
+	armRX = {
+		{ 0, 0.1 }, { 1.4, 0.2, "Sine", "InOut" }, { 2.6, 0.1, "Sine", "InOut" },
+		{ 3.9, 0.1 }, { 4.15, 2.9, "Back", "Out" }, { 4.6, 2.9 }, { 4.95, 0.1, "Bounce", "Out" },
+		{ 5.18, 0.7, "Quad", "Out" }, { 5.36, -0.5, "Quad", "In" },
+		{ 5.54, 0.6, "Quad", "Out" }, { 5.72, -0.4, "Quad", "In" },
+		{ 6.3, 0.1, "Elastic", "Out" }, { 6.6, 0.1 },
+	},
+	armLX = {
+		{ 0, 0.1 }, { 1.4, 0.2, "Sine", "InOut" }, { 2.6, 0.1, "Sine", "InOut" },
+		{ 5.0, 0.1 }, { 5.18, -0.5, "Quad", "Out" }, { 5.36, 0.7, "Quad", "In" },
+		{ 5.54, -0.4, "Quad", "Out" }, { 5.72, 0.6, "Quad", "In" },
+		{ 6.3, 0.1, "Elastic", "Out" }, { 6.6, 0.1 },
+	},
+	-- Arms out from the body (+ away from the sides)
+	armROut = { { 0, 0.16 }, { 1.4, 0.24, "Sine", "InOut" }, { 2.6, 0.16, "Sine", "InOut" }, { 6.6, 0.16 } },
+	armLOut = {
+		{ 0, 0.16 }, { 1.4, 0.24, "Sine", "InOut" }, { 2.6, 0.16, "Sine", "InOut" },
+		{ 3.9, 0.16 }, { 4.15, 0.4, "Back", "Out" }, { 4.6, 0.4 }, { 4.95, 0.16, "Cubic", "InOut" }, { 6.6, 0.16 },
+	},
+	-- Legs: a wide, ready stance; they kick a little on the hops
+	legSpread = { { 0, 0.09 }, { 6.6, 0.09 } },
+	legLX = {
+		{ 0, 0 }, { 5.0, 0 }, { 5.18, 0.3, "Quad", "Out" }, { 5.36, 0, "Quad", "In" },
+		{ 5.54, -0.2, "Quad", "Out" }, { 5.72, 0, "Quad", "In" }, { 6.6, 0 },
+	},
+	legRX = {
+		{ 0, 0 }, { 5.0, 0 }, { 5.18, -0.2, "Quad", "Out" }, { 5.36, 0, "Quad", "In" },
+		{ 5.54, 0.3, "Quad", "Out" }, { 5.72, 0, "Quad", "In" }, { 6.6, 0 },
+	},
+}
+
+-- Value of a keyframed channel at time t, eased like a tween between keys
+local function sampleTrack(keys, t: number): number
+	if t <= keys[1][1] then
+		return keys[1][2]
+	end
+	for i = 2, #keys do
+		local k = keys[i]
+		if t <= k[1] then
+			local p = keys[i - 1]
+			local alpha = (t - p[1]) / math.max(1e-6, k[1] - p[1])
+			if k[3] then
+				alpha = TweenService:GetValue(alpha, Enum.EasingStyle[k[3]], Enum.EasingDirection[k[4] or "Out"])
+			end
+			return p[2] + (k[2] - p[2]) * alpha
+		end
+	end
+	return keys[#keys][2]
+end
+
 -- R6 joints, each with the parent part it lives in
 local R6_JOINTS = {
 	RootJoint = "HumanoidRootPart",
@@ -2590,6 +2684,7 @@ function RunCycle.new(character: Model)
 	self.animator = character:FindFirstChildWhichIsA("Animator", true)
 	self.phase = 0
 	self.armPhase = 0 -- the arms' own clock, which runs faster than the legs' at speed
+	self.idleTime = 0 -- seconds into the idle loop; restarts each time you stand still
 	self.time = 0
 	self.air = 0
 	self.speed = 0
@@ -2809,6 +2904,37 @@ function RunCycle:LimitArmsBack(pose)
 	end
 end
 
+-- Standing still on R6: blend (by k) into the keyframed stylized idle above
+function RunCycle:ApplyIdle(pose, k: number)
+	if not self.r6 then
+		return
+	end
+	local C = Config
+	local t = self.idleTime % IDLE_LENGTH
+	local v = {}
+	for name, keys in IDLE do
+		v[name] = sampleTrack(keys, t) * C.RunCycleIdleScale
+	end
+	-- Poses here are in each R6 joint's frame
+	local function conv(name: string, cf: CFrame): CFrame
+		local f = self.frames[name]
+		return f:Inverse() * cf * f
+	end
+	local target = {
+		RootJoint = conv("RootJoint", CFrame.new(0, v.rootY, 0) * rot(v.torsoPitch, 0, v.torsoRoll)),
+		Neck = conv("Neck", rot(v.headPitch, v.headYaw, 0)),
+		["Left Shoulder"] = conv("Left Shoulder", rot(0, 0, -v.armLOut) * rot(v.armLX, 0, 0)),
+		["Right Shoulder"] = conv("Right Shoulder", rot(0, 0, v.armROut) * rot(v.armRX, 0, 0)),
+		["Left Hip"] = conv("Left Hip", rot(0, 0, -v.legSpread) * rot(v.legLX, 0, 0)),
+		["Right Hip"] = conv("Right Hip", rot(0, 0, v.legSpread) * rot(v.legRX, 0, 0)),
+	}
+	for name, cf in target do
+		if pose[name] then
+			pose[name] = pose[name]:Lerp(cf, k)
+		end
+	end
+end
+
 -- turnRate: how fast the heading is turning, radians per second (positive = left)
 function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalSpeed: number, turnRate: number?)
 	self.time += dt
@@ -2836,6 +2962,13 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 		self.armPhase = (self.armPhase + dt * cadence * armRate * 2 * math.pi) % (2 * math.pi)
 	end
 	self.air += ((if grounded then 0 else 1) - self.air) * (1 - math.exp(-10 * dt))
+	-- Standing still: the idle takes over (and starts from the top each time you stop)
+	local idle = (1 - smooth(speed / C.RunCycleIdleSpeed)) * (1 - self.air)
+	if idle > 0.001 then
+		self.idleTime += dt * C.RunCycleIdleRate
+	else
+		self.idleTime = 0
+	end
 
 	-- Anything the Animator is still playing (avatar idles, emotes) would fight us
 	if self.animator then
@@ -2860,6 +2993,9 @@ function RunCycle:Update(dt: number, speed: number, grounded: boolean, verticalS
 		self:ApplyTopSpeed(pose, top)
 	end
 	self:LimitArmsBack(pose)
+	if idle > 0.001 then
+		self:ApplyIdle(pose, idle)
+	end
 	for name, joint in self.motors do
 		joint.Transform = CFrame.identity:Lerp(pose[name], self.weight)
 	end
